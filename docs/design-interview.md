@@ -6,9 +6,12 @@ Decisions settled on 20 October 2026:
   application, optional model integration, hosting and access boundaries.
 - Use MIT for application code and project-authored documentation, with a 2026
   Flipper contributors notice. Third-party datasets retain their own terms.
-- Reset public history and publish through the same `sergkhl/flipper` repository.
-  Preserve prior history and operational records privately; generalize published
-  installation/deployment instructions and omit runtime data and credentials.
+- Publish clean history at the original `sergkhl/flipper` URL using a fresh
+  public repository. Retain the predecessor repository and history privately
+  under a separate name. This replaces the initial same-repository visibility
+  change because GitHub retained old commit objects after a history reset.
+  Preserve operational records privately; generalize published installation and
+  deployment instructions and omit runtime data and credentials.
 - Run full market refreshes for laptops, desktops and standalone graphics cards
   sequentially, using the current scan limits and persistent filter defaults.
 - Start daily at **12:00 PM (noon) Vietnam time**, Asia/Ho_Chi_Minh (UTC+7).
