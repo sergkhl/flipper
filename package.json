@@ -1,0 +1,36 @@
+{
+  "name": "flipper",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/sergkhl/flipper.git" },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite --host 127.0.0.1\"",
+    "build": "tsc --noEmit && vite build",
+    "start": "tsx server/index.ts",
+    "test": "tsx --test test/*.test.ts",
+    "memory:sync": "tsx scripts/sync-memory-cache.ts",
+    "check": "tsc --noEmit",
+    "deploy": "node deploy/deploy.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "^1.55.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^10.0.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}

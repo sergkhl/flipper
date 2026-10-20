@@ -1,0 +1,125 @@
+# Used-item discovery
+
+A personal web app for finding undervalued used computers and standalone GPUs
+advertised on local marketplaces, focused on finding good deals against supported
+asking-price references. Resale controls and assumptions are removed from the
+interface as of 14 October 2026; legacy stored fields remain compatible. Phones
+are excluded from the current version. Chợ Tốt is the initial
+marketplace and Da Nang is the initial buying location. Reference comparisons
+use nationwide offers for particular device models or important components.
+The app supports category browsing, model searches, saved searches, and manual
+refresh, with LiteLLM-assisted classification and interpretation. Chat uses the
+exact gateway route `xiaomi_mimo/mimo-v2.6-flash`; the dedicated OpenRouter
+Decisions passthrough uses unprefixed `perplexity/pplx-decider-v1.2` (V1.1 until
+2026-10-18, when OpenRouter had withdrawn its endpoint).
+Both authenticate with the project's `LITELLM_API_KEY`. Current endpoints and
+configuration are recorded in `docs/llm-settings.md` and ADR 0004.
+
+The application is published under MIT. Runtime seller data, personal state,
+credentials and operator-specific records remain outside the source repository.
+Hosted operation permits anonymous read-only market evidence and private
+administrator collection, settings and schedule control.
+
+## Language
+
+**Marketplace**:
+An external service on which sellers advertise items. Chợ Tốt is the first
+marketplace in scope.
+
+**Listing**:
+A seller's advertisement on a marketplace. Its attributes and description are
+claims supplied by the seller.
+
+**Asking price**:
+The price advertised in a listing. It is distinct from the amount paid in a
+completed sale.
+
+**Personal buying**:
+Finding a used item to acquire for the user's own use.
+
+**Resale discovery**:
+Legacy calculation retained for stored-data compatibility; its interface was
+removed on 14 October. The initial estimate uses 90% of its chosen
+reference price, subtracts the asking price and a cost reserve, and labels a
+resale opportunity only when its discount, net-profit and return thresholds pass.
+
+**Local listing**:
+A listing advertised in Da Nang, the initial buying location. District filters
+and pickup-first discovery are part of the accepted initial scope.
+
+**Saved search**:
+A search the user can return to and refresh manually. Saving a search does not
+schedule collection or notifications.
+
+**Daily market scan**:
+The accepted 20 October 2026 design for a full market refresh of laptops,
+desktops and standalone GPUs, starting at 12:00 Vietnam time each day. Categories
+run sequentially with the current bounded collection, enrichment and nationwide
+comparison work. This is separate from opening or saving a search. Each category receives at most one automatic attempt per Vietnam schedule day.
+First enable waits for the next noon; interrupted attempts are not retried that
+day. Schedule controls, execution history and budgets are private.
+
+**Standalone GPU**:
+A separately advertised graphics card, presented in its own search view.
+The actual GPU model and memory configuration must be distinguished from
+whole-system, accessory, wanted, or multi-model advertisements.
+
+**Reference price**:
+A filtered arithmetic mean of matching nationwide used Chợ Tốt asking-price
+offers from independent sellers. At least three offers provide an indicative
+average and range; at least five (or a higher configured minimum) are required
+for deal scoring. The candidate, its seller,
+duplicates, incompatible configurations, ambiguous offers, and numeric outliers
+are excluded. Explicit shared business contact evidence also links seller
+accounts for deduplication; unrelated accounts are not proof of independent
+businesses. Sufficient complete-configuration evidence is preferred; sparse
+computer evidence can be supplemented by component-adjusted comparisons.
+
+**Component-adjusted comparison**:
+A comparable computer's asking price minus supported averages for removed parts
+plus supported averages for added parts. Desktops retain CPU/platform and can
+adjust GPU, RAM and SSD. Laptops retain model, CPU and mobile GPU and require
+verified RAM/SSD replaceability. Explicit GPU absence differs from unknown GPU
+inclusion, and separately priced configurations retain their own included parts.
+Each PC advertisement and seller contributes once. The weakest PC/part pool
+sets the evidence count; combinations do not manufacture independent samples.
+Missing base details are displayed and reduce confidence without blocking
+deal scoring, as explicitly requested on 13 October. Required
+part identities and prices still need evidence. This method is implemented;
+the accepted decisions are recorded in `docs/design-interview.md`.
+
+Computer browsing defaults to RAM ≥16 GB; standalone GPUs and included discrete
+computer graphics default to VRAM ≥8 GB. Integrated-only and explicitly GPU-free
+computers are exempt from the VRAM minimum. Unknown applicable capacities are
+included by default, with one explicit filter controlling both. The defaults
+persist in Settings & AI, toolbar controls affect the current search, and saved
+searches retain their own choices. Manual refresh prioritizes known matches,
+then possible unknown matches, then known failures, with price ordering within
+each group. Directly stated memory types and uniquely manufacturer-supported
+derived types are displayed separately from capacity, with provenance for the
+latter. Ambiguous variants and contradictory evidence remain unresolved.
+
+**Discount threshold**:
+The minimum reduction of the asking price relative to its reference price.
+It defaults to 20% and is configurable. For reference price R and asking price
+P, the discount is (R - P) / R; at the default threshold P must be at most 0.8R.
+
+**Partial component baseline**:
+A sum of independently supported prices for explicitly identified desktop
+components. Only the displayed parts are included; omitted parts have no inferred
+value. This is not a complete-system market price. Each included component needs
+at least five independent matching nationwide offers.
+
+**Cost reserve**:
+Legacy stored allowance for transport, preparation and other purchase/resale costs.
+Defaults are VND 500,000 for laptops/desktops and VND 200,000 for standalone GPUs.
+
+**Observed price**:
+An asking price retrieved at a recorded time. It is historical evidence, not a
+claim that the listing is still available or that a completed sale occurred.
+
+**AI assessment**:
+Decider classifies a listing's type, eligibility and ambiguity. MiMo extracts
+stated hardware specifications and supporting seller-text quotes. Numeric price
+references and opportunity calculations use retrieved offers and deterministic
+arithmetic. A manual refresh has a configurable USD 0.25 initial AI budget.

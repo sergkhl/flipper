@@ -1,0 +1,46 @@
+name: flipper
+
+services:
+  app:
+    image: flipper:${FLIPPER_DEPLOY_REVISION:?Use the deployment command to select a revision}
+    container_name: ${FLIPPER_CONTAINER_NAME:-flipper-app}
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: "4317"
+      FLIPPER_HOST: 0.0.0.0
+      FLIPPER_DATA_DIR: /app/.data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    stop_grace_period: 30s
+    volumes:
+      - type: bind
+        source: ./.data
+        target: /app/.data
+        bind:
+          create_host_path: false
+    networks: [edge]
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4317/healthz').then(async r => {const h=await r.json(); if(!r.ok || h.revision!==process.env.FLIPPER_REVISION) process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
+
+networks:
+  edge:
+    external: true
+    name: ${FLIPPER_DOCKER_NETWORK:-web}

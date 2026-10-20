@@ -1,0 +1,23 @@
+# Add this block to your edge Caddyfile and replace the example hostname.
+# Caddy receives FLIPPER_ADMIN_HASH and FLIPPER_ADMIN_TOKEN from its private flipper.env.
+flipper.example.com {
+	encode zstd gzip
+	header X-Content-Type-Options nosniff
+	header Referrer-Policy strict-origin-when-cross-origin
+	@admin path /admin /admin/*
+	handle @admin {
+		basic_auth argon2id {
+			flipper {$FLIPPER_ADMIN_HASH}
+		}
+		reverse_proxy flipper-app:4317 {
+			header_up X-Flipper-Admin-Token {$FLIPPER_ADMIN_TOKEN}
+			header_up -Authorization
+		}
+	}
+	handle {
+		reverse_proxy flipper-app:4317 {
+			header_up -X-Flipper-Admin-Token
+			header_up -Authorization
+		}
+	}
+}
