@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { AppSettings } from '../shared/types.ts';
 import { FlipperService } from './service.ts';
 import { serverOptions, validAdminToken, validateServerAccess, type ServerOptions } from './access.ts';
+import { SourceCooldownError } from './source-cooldown.ts';
 
 const categorySchema = z.enum(['laptop','desktop','gpu']);
 const memoryMinimumSchema = z.number().int().min(0).max(4096);
@@ -25,6 +26,19 @@ const settingsSchema = z.object({
 const stateSchema = z.object({ saved: z.boolean().optional(), dismissed: z.boolean().optional(),
   costReserve: z.number().finite().min(0).max(1e9).nullable().optional(), expectedResale: z.number().finite().positive().max(1e10).nullable().optional() }).strict();
 class HTTPError extends Error { constructor(readonly status: number, message: string) { super(message); } }
+const recoverySchema = z.object({
+  budgetUsd: z.number().finite().min(0).max(10),
+  cooldown: z.object({ until: z.string().datetime(), observedAt: z.string().datetime(), status: z.number().int().min(400).max(599) }).strict()
+    .refine(value => Date.parse(value.until) > Date.parse(value.observedAt), 'Cooldown must end after its observation'),
+  job: z.object({
+    id: z.string().min(1).max(100), category: categorySchema, query: z.string().max(200), status: z.literal('failed'),
+    message: z.string().max(2000), scanned: z.number().int().min(0).max(1000), target: z.number().int().min(1).max(1000),
+    assessed: z.number().int().min(0).max(1000), benchmarked: z.number().int().min(0).max(1000),
+    totalAvailable: z.number().int().nonnegative().nullable(), requestCount: z.number().int().nonnegative(),
+    aiCostUsd: z.number().finite().nonnegative(), error: z.string().max(2000).nullable(),
+    startedAt: z.string().datetime(), completedAt: z.string().datetime(), retryOf: z.string().max(100).optional(),
+  }).strict(),
+}).strict();
 
 async function body(req: IncomingMessage): Promise<unknown> {
   const contentType = req.headers['content-type'] ?? '';
@@ -102,6 +116,13 @@ export function appServer(service: FlipperService, dist = resolve('dist'), optio
         const { enabled } = parse(z.object({ enabled: z.boolean() }).strict(), await mutationBody());
         return json(res, service.configureDailyScans(enabled));
       }
+      if (path === '/api/scan-retries' && req.method === 'POST') {
+        const data = parse(recoverySchema, await mutationBody());
+        if (data.budgetUsd > service.store.getSettings().aiBudgetUsd) throw new HTTPError(400, 'Recovery cannot increase the configured manual budget');
+        return json(res, { retry: service.recoverScanRetry(data.job, data.budgetUsd, data.cooldown) }, 201);
+      }
+      const retryCancel = path.match(/^\/api\/scan-retries\/([^/]+)\/cancel$/);
+      if (retryCancel && req.method === 'POST') return json(res, { retry: service.cancelScanRetry(retryCancel[1]!) });
       if (path === '/api/listings' && readRequest) {
         const category = parse(categorySchema, url.searchParams.get('category') ?? 'laptop');
         for (const name of ['minRamGb', 'minVramGb']) if (url.searchParams.has(name)) {
@@ -159,9 +180,12 @@ export function appServer(service: FlipperService, dist = resolve('dist'), optio
       res.end(req.method === 'HEAD' ? undefined : readFileSync(file));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Request failed';
-      const status = error instanceof HTTPError ? error.status : !publicReadOnly && message === 'Deployment is in progress; try again shortly' ? 503
-        : !publicReadOnly && /already running|active refresh|Wait for/.test(message) ? 409 : 500;
-      json(res, { error: publicReadOnly && !(error instanceof HTTPError) ? 'The request could not be completed' : message }, status);
+      const cooldown = !publicReadOnly && error instanceof SourceCooldownError ? error.cooldown : null;
+      if (cooldown) res.setHeader('Retry-After', String(Math.max(0, Math.ceil((Date.parse(cooldown.until) - Date.now()) / 1000))));
+      const status = error instanceof HTTPError ? error.status : cooldown ? 429 : !publicReadOnly && message === 'Deployment is in progress; try again shortly' ? 503
+        : !publicReadOnly && /already running|already queued|active refresh|Wait for/.test(message) ? 409 : 500;
+      json(res, { error: publicReadOnly && !(error instanceof HTTPError) ? 'The request could not be completed' : message,
+        ...(cooldown ? { retryAt: cooldown.until } : {}) }, status);
     }
   });
 }

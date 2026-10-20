@@ -29,3 +29,9 @@ Decisions settled on 20 October 2026:
 
 ADRs record the publication boundary and durable scheduler design. Operator
 interview history and environment-specific evidence are maintained privately.
+
+Follow-up accepted on 20 October 2026: persist Chợ Tốt's cooldown and
+automatically recover source-cooldown failures after it expires, including the
+incomplete desktop and GPU refreshes. Keep the daily noon boundary and original
+budget limits. ADR 0007 records this specific exception to the earlier
+no-automatic-retry rule, cumulative spending and shared daily/recovery work.

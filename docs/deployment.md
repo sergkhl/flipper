@@ -63,11 +63,33 @@ The strictly next noon is persisted; server restarts preserve eligibility.
 No Mac scheduler or browser session is required. A private GET of that endpoint
 reports enablement, next start, latest schedule day and category outcomes.
 
-The scheduler adds `daily_scan_control` and `daily_scan_attempts` tables without
+Chợ Tốt cooldowns persist across restarts and defer all marketplace requests
+without moving the noon boundary or consuming a daily attempt. Source-cooldown
+failures of full refreshes enter a durable recovery queue. Waiting entries resume
+automatically after the advertised deadline and the shared busy/maintenance gate.
+Retry job costs include earlier attempts and unknown-billing reservations against
+the original allowance. A matching due daily category shares the recovery job.
+Other failures, cancellations and interrupted claims do not repeat automatically.
+The private schedule view shows queued recoveries and lets administrators cancel
+waiting entries independently of the daily enable switch.
+
+For a finalized failed refresh made before durable recovery was available, the
+private `POST /admin/api/scan-retries` accepts its `job` snapshot, original
+`budgetUsd`, and verified `cooldown` (`until`, `observedAt`, HTTP `status`). Keep
+that production evidence private. The allowance cannot exceed the configured
+manual cap. Re-importing the same original job is idempotent and cannot rearm a
+completed or cancelled record. `POST /admin/api/scan-retries/:id/cancel` cancels
+a waiting recovery. Public callers cannot access these controls or history.
+
+The scheduler adds `daily_scan_control`, `daily_scan_attempts`, `source_cooldowns`
+and `scan_retries` tables without
 altering or removing existing data. Older compatible application images ignore
 these additive tables. Image rollback keeps the journal so reverting an image
 does not reset spent or uncertain scheduled allowances. Do not restore a SQLite
 snapshot as an automatic image-rollback step.
+
+Images predating cooldown recovery do not honor the persisted source pause or
+execute its queue. Keep that limitation explicit when choosing a rollback image.
 
 Before a deliberate database restore, pause scheduling, stop this service, make
 a fresh consistent backup, and reconcile any already-started scheduled attempts.

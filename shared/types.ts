@@ -267,6 +267,8 @@ export interface RefreshJob {
   error: string | null;
   startedAt: string;
   completedAt: string | null;
+  /** Retry costs include the earlier attempts against the same allowance. */
+  retryOf?: string;
 }
 export interface ListingsResponse {
   items: ListingView[];
@@ -296,6 +298,25 @@ export type BootstrapResponse = AdminBootstrapResponse | PublicBootstrapResponse
 export interface ListingDetail extends ListingView { history: { at: string; price: number }[]; }
 
 export interface DailyScanControl { enabled: boolean; firstDueAt: string | null; }
+export interface SourceCooldown {
+  until: string;
+  observedAt: string;
+  status: number;
+}
+export interface ScanRetry {
+  id: string;
+  category: Category;
+  query: string;
+  originalJobId: string;
+  dueAt: string;
+  budgetUsd: number;
+  spentUsd: number;
+  status: 'waiting' | 'running' | 'complete' | 'failed' | 'cancelled' | 'interrupted';
+  attempts: number;
+  dailyDay: string | null;
+  job: RefreshJob;
+  aiIssue: string | null;
+}
 export interface DailyScanAttempt {
   day: string;
   category: Category;
@@ -314,7 +335,9 @@ export interface DailyScanStatus {
   perCategoryBudgetUsd: number;
   dailyBudgetUsd: number;
   nextRunAt: string | null;
-  state: 'disabled' | 'scheduled' | 'due' | 'busy' | 'maintenance' | 'running';
+  state: 'disabled' | 'scheduled' | 'due' | 'busy' | 'maintenance' | 'running' | 'cooldown';
   lastRunDay: string | null;
   attempts: DailyScanAttempt[];
+  cooldown: SourceCooldown | null;
+  retries: ScanRetry[];
 }

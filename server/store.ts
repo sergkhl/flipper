@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { AI_ASSESSMENT_VERSION, DEFAULT_SETTINGS } from './config.ts';
 import { assessWithRules } from './hardware.ts';
-import type { AIReceipt, AppSettings, Assessment, Category, Coverage, DailyScanAttempt, DailyScanControl, ListingState, RawListing, ReferencePrice, RefreshJob, SavedSearch } from '../shared/types.ts';
+import type { AIReceipt, AppSettings, Assessment, Category, Coverage, DailyScanAttempt, DailyScanControl, ListingState, RawListing, ReferencePrice, RefreshJob, SavedSearch, ScanRetry, SourceCooldown } from '../shared/types.ts';
 import { DAILY_SCAN_BUDGET, DAILY_SCAN_CATEGORIES, DAILY_SCAN_CATEGORY_BUDGET, nextVietnamNoon, vietnamDay, vietnamNoon } from './scheduler.ts';
 
 const Database = ('Database' in sqlite ? sqlite.Database : sqlite.DatabaseSync) as typeof sqlite.DatabaseSync;
@@ -42,7 +42,13 @@ export class Store {
       CREATE TABLE IF NOT EXISTS daily_scan_control (id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS daily_scan_attempts (day TEXT NOT NULL, category TEXT NOT NULL,
         budget_usd REAL NOT NULL, cost_usd REAL NOT NULL DEFAULT 0, json TEXT NOT NULL,
-        settings_json TEXT NOT NULL, PRIMARY KEY(day,category));`);
+        settings_json TEXT NOT NULL, PRIMARY KEY(day,category));
+      CREATE TABLE IF NOT EXISTS source_cooldowns (id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS scan_retries (id TEXT PRIMARY KEY, original_job_id TEXT NOT NULL UNIQUE,
+        category TEXT NOT NULL, query TEXT NOT NULL, status TEXT NOT NULL, due_at TEXT NOT NULL,
+        json TEXT NOT NULL, settings_json TEXT NOT NULL);
+      CREATE UNIQUE INDEX IF NOT EXISTS scan_retries_pending ON scan_retries(category,query)
+        WHERE status IN ('waiting','running');`);
   }
   close(): void { this.db.close(); }
   deploymentMaintenanceActive(): boolean { return existsSync(join(this.directory, '.deployment-maintenance')); }
@@ -166,6 +172,104 @@ export class Store {
   }
   totalCost(): number { return (this.db.prepare('SELECT COALESCE(SUM(cost),0) AS total FROM receipts').get() as { total: number }).total; }
 
+  sourceCooldown(): SourceCooldown | null {
+    const row = this.db.prepare('SELECT json FROM source_cooldowns WHERE id=1').get() as { json: string } | undefined;
+    return row ? JSON.parse(row.json) : null;
+  }
+  recordSourceCooldown(value: SourceCooldown): SourceCooldown {
+    if (!Number.isFinite(Date.parse(value.until)) || !Number.isFinite(Date.parse(value.observedAt))) throw new Error('Invalid source cooldown');
+    const previous = this.sourceCooldown();
+    if (previous && Date.parse(previous.until) >= Date.parse(value.until)) return previous;
+    const normalized = { ...value, until: new Date(value.until).toISOString(), observedAt: new Date(value.observedAt).toISOString() };
+    this.db.prepare('INSERT INTO source_cooldowns(id,json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET json=excluded.json').run(JSON.stringify(normalized));
+    return normalized;
+  }
+  scanRetries(): ScanRetry[] {
+    return this.db.prepare(`SELECT json FROM scan_retries ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'waiting' THEN 1 ELSE 2 END,due_at DESC LIMIT 30`)
+      .all().map(row => JSON.parse(row.json as string));
+  }
+  pendingScanRetry(category: Category, query: string): ScanRetry | null {
+    const row = this.db.prepare("SELECT json FROM scan_retries WHERE category=? AND query=? AND status IN ('waiting','running')").get(category, query) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) : null;
+  }
+  deferScanRetry(job: RefreshJob, settings: AppSettings, cooldown: SourceCooldown, dailyDay: string | null, retryId?: string): ScanRetry {
+    const row = this.db.prepare('SELECT json FROM scan_retries WHERE ' + (retryId ? 'id=?' : 'original_job_id=?')).get(retryId ?? job.id) as { json: string } | undefined;
+    const previous: ScanRetry | null = row ? JSON.parse(row.json) : null;
+    // Re-importing an operator recovery record must never rearm a completed/cancelled retry.
+    if (!retryId && previous) return previous;
+    const retry: ScanRetry = previous ? { ...previous, dueAt: cooldown.until, status: 'waiting',
+      spentUsd: Math.max(previous.spentUsd, job.aiCostUsd), job: { ...job }, dailyDay, aiIssue: previous.aiIssue }
+      : { id: randomUUID(), category: job.category, query: job.query, originalJobId: job.id,
+        dueAt: cooldown.until, budgetUsd: settings.aiBudgetUsd, spentUsd: job.aiCostUsd,
+        status: 'waiting', attempts: 0, dailyDay, job: { ...job }, aiIssue: null };
+    this.saveScanRetry(retry, settings); return retry;
+  }
+  private saveScanRetry(retry: ScanRetry, settings?: AppSettings): void {
+    if (settings) this.db.prepare(`INSERT INTO scan_retries(id,original_job_id,category,query,status,due_at,json,settings_json) VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET status=excluded.status,due_at=excluded.due_at,json=excluded.json`)
+      .run(retry.id, retry.originalJobId, retry.category, retry.query, retry.status, retry.dueAt, JSON.stringify(retry), JSON.stringify(settings));
+    else this.db.prepare('UPDATE scan_retries SET status=?,due_at=?,json=? WHERE id=?')
+      .run(retry.status, retry.dueAt, JSON.stringify(retry), retry.id);
+  }
+  /** A retry and a due daily category share one job and the tighter captured allowance. */
+  claimScanRetry(now: Date): { retry: ScanRetry; settings: AppSettings } | null {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const cooldown = this.sourceCooldown();
+      if (cooldown && Date.parse(cooldown.until) > now.getTime()) { this.db.exec('COMMIT'); return null; }
+      const row = this.db.prepare("SELECT json,settings_json FROM scan_retries WHERE status='waiting' AND due_at<=? ORDER BY due_at, rowid LIMIT 1")
+        .get(now.toISOString()) as { json: string; settings_json: string } | undefined;
+      if (!row) { this.db.exec('COMMIT'); return null; }
+      const retry: ScanRetry = JSON.parse(row.json), settings: AppSettings = JSON.parse(row.settings_json);
+      const day = vietnamDay(now);
+      const current = this.getSettings();
+      const sharesDailyScope = retry.query === '' && retry.job.target === current.scanLimit
+        && (['benchmarkLimit', 'minRamGb', 'minVramGb', 'includeUnknownMemory', 'aiEnabled'] as const).every(key => settings[key] === current[key]);
+      if (sharesDailyScope && this.dailyScansDue(now)) {
+        const existing = this.dailyScanAttempts(day).find(a => a.category === retry.category);
+        if (!existing) {
+          const claim = this.insertDailyScan(settings, now, retry.category);
+          retry.budgetUsd = Math.min(retry.budgetUsd, claim.attempt.budgetUsd);
+          retry.dailyDay = day;
+        } else if (retry.dailyDay !== day) {
+          // A fresh completed daily refresh already satisfied this recovery request.
+          if (existing.status === 'complete' && existing.job && Date.parse(existing.job.completedAt ?? '') >= Date.parse(retry.job.completedAt ?? '')) {
+            this.saveScanRetry({ ...retry, status: 'complete', job: existing.job });
+            this.db.exec('COMMIT'); return null;
+          }
+          retry.dailyDay = null;
+        }
+      }
+      const claimed: ScanRetry = { ...retry, status: 'running', attempts: retry.attempts + 1 };
+      this.saveScanRetry(claimed);
+      this.db.exec('COMMIT'); return { retry: claimed, settings: { ...settings, aiBudgetUsd: retry.budgetUsd } };
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  recordScanRetry(id: string, job: RefreshJob, aiIssue: string | null): void {
+    const row = this.db.prepare('SELECT json FROM scan_retries WHERE id=?').get(id) as { json: string } | undefined;
+    if (!row) throw new Error('Scan retry claim is missing');
+    const retry: ScanRetry = JSON.parse(row.json);
+    const terminal = ['complete', 'failed', 'cancelled'].includes(job.status);
+    // A cooldown failure may already have returned this claim to the waiting queue.
+    const status = retry.status === 'waiting' ? 'waiting' : terminal ? job.status as 'complete' | 'failed' | 'cancelled' : 'running';
+    this.saveScanRetry({ ...retry, job: { ...job }, status, aiIssue, spentUsd: Math.max(retry.spentUsd, job.aiCostUsd) });
+  }
+  cancelScanRetry(id: string): ScanRetry {
+    const row = this.db.prepare('SELECT json FROM scan_retries WHERE id=?').get(id) as { json: string } | undefined;
+    if (!row) throw new Error('Scan retry not found');
+    const retry: ScanRetry = JSON.parse(row.json);
+    if (retry.status === 'running') throw new Error('Cancel the active refresh before cancelling its retry');
+    const cancelled: ScanRetry = retry.status === 'waiting' ? { ...retry, status: 'cancelled' } : retry;
+    this.saveScanRetry(cancelled); return cancelled;
+  }
+  interruptScanRetries(now = new Date()): void {
+    for (const retry of this.scanRetries().filter(retry => retry.status === 'running')) {
+      this.saveScanRetry({ ...retry, status: 'interrupted', spentUsd: Math.max(retry.spentUsd, retry.budgetUsd),
+        job: { ...retry.job, status: 'cancelled', completedAt: now.toISOString(),
+          message: 'Retry interrupted by restart; its remaining allowance is reserved and automatic repetition is disabled' } });
+    }
+  }
+
   dailyScanControl(): DailyScanControl {
     const row = this.db.prepare('SELECT json FROM daily_scan_control WHERE id=1').get() as { json: string } | undefined;
     return row ? JSON.parse(row.json) : { enabled: false, firstDueAt: null };
@@ -183,26 +287,34 @@ export class Store {
       CASE category WHEN 'laptop' THEN 0 WHEN 'desktop' THEN 1 ELSE 2 END`).all(day)
       .map(row => JSON.parse(row.json as string));
   }
+  private dailyScansDue(now: Date): boolean {
+    const control = this.dailyScanControl();
+    return control.enabled && control.firstDueAt !== null && Date.parse(control.firstDueAt) <= now.getTime() && vietnamNoon(now) <= now.getTime();
+  }
+  private insertDailyScan(settings: AppSettings, now: Date, category: Category): { attempt: DailyScanAttempt; settings: AppSettings } {
+    const day = vietnamDay(now);
+    const accounted = (this.db.prepare('SELECT COALESCE(SUM(MAX(budget_usd,cost_usd)),0) AS total FROM daily_scan_attempts WHERE day=?')
+      .get(day) as { total: number }).total;
+    const budgetUsd = Math.min(settings.aiBudgetUsd, DAILY_SCAN_CATEGORY_BUDGET, Math.max(0, DAILY_SCAN_BUDGET - accounted));
+    const captured = { ...settings, aiBudgetUsd: budgetUsd };
+    const attempt: DailyScanAttempt = { day, category, status: 'running', budgetUsd,
+      startedAt: now.toISOString(), completedAt: null, job: null, aiIssue: null };
+    this.db.prepare('INSERT INTO daily_scan_attempts(day,category,budget_usd,json,settings_json) VALUES(?,?,?,?,?)')
+      .run(day, category, budgetUsd, JSON.stringify(attempt), JSON.stringify(captured));
+    return { attempt, settings: captured };
+  }
   /** Atomically selects an unstarted category and retains its full crash allowance. */
   claimDailyScan(settings: AppSettings, now: Date): { attempt: DailyScanAttempt; settings: AppSettings } | null {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      const control = this.dailyScanControl(), day = vietnamDay(now);
-      if (!control.enabled || !control.firstDueAt || Date.parse(control.firstDueAt) > now.getTime() || vietnamNoon(now) > now.getTime()) {
+      const day = vietnamDay(now), cooldown = this.sourceCooldown();
+      if (!this.dailyScansDue(now) || (cooldown && Date.parse(cooldown.until) > now.getTime())) {
         this.db.exec('COMMIT'); return null;
       }
       const attempts = this.dailyScanAttempts(day), category = DAILY_SCAN_CATEGORIES.find(category => !attempts.some(attempt => attempt.category === category));
       if (!category) { this.db.exec('COMMIT'); return null; }
-      // Above-ceiling provider reports reduce admission for later categories too.
-      const accounted = (this.db.prepare('SELECT COALESCE(SUM(MAX(budget_usd,cost_usd)),0) AS total FROM daily_scan_attempts WHERE day=?')
-        .get(day) as { total: number }).total;
-      const budgetUsd = Math.min(DAILY_SCAN_CATEGORY_BUDGET, Math.max(0, DAILY_SCAN_BUDGET - accounted));
-      const captured = { ...settings, aiBudgetUsd: budgetUsd };
-      const attempt: DailyScanAttempt = { day, category, status: 'running', budgetUsd,
-        startedAt: now.toISOString(), completedAt: null, job: null, aiIssue: null };
-      this.db.prepare('INSERT INTO daily_scan_attempts(day,category,budget_usd,json,settings_json) VALUES(?,?,?,?,?)')
-        .run(day, category, budgetUsd, JSON.stringify(attempt), JSON.stringify(captured));
-      this.db.exec('COMMIT'); return { attempt, settings: captured };
+      const claim = this.insertDailyScan({ ...settings, aiBudgetUsd: DAILY_SCAN_CATEGORY_BUDGET }, now, category);
+      this.db.exec('COMMIT'); return claim;
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   recordDailyScan(day: string, job: RefreshJob, aiIssue: string | null = null): void {

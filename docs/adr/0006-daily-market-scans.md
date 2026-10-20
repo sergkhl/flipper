@@ -1,5 +1,8 @@
 # Application-owned daily market scans with durable category admission
 
+ADR 0007 adds a specific exception for durable source-cooldown recovery; the
+other failure, interruption and budget rules below remain in force.
+
 The server schedules laptop, desktop and graphics-card full refreshes at 12:00 PM
 (noon) Asia/Ho_Chi_Minh. Reuse the existing collection/interpretation/comparison
 pipeline and its single-job exclusion rather than depending on a personal

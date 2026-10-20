@@ -64,14 +64,21 @@ comparisons available, with assessment status shown.
 
 - First enable or resume waits for the strictly next noon.
 - Existing manual work, provider tests and deployments defer collection.
-- Each category receives at most one automatic attempt per Vietnam date.
-- A failed, cancelled or interrupted category is not automatically repeated
-  that day. Other unstarted categories can continue.
+- Each category receives at most one fresh scheduled allowance per Vietnam date.
+- Source cooldowns persist across restarts. Marketplace requests wait until the
+  deadline, and an eligible daily category is not claimed during that pause.
+- A full refresh stopped by a source cooldown is queued for automatic recovery.
+  Retry costs include prior attempts and unknown charges against the original
+  allowance. A matching due daily category shares that job, avoiding duplicate
+  scans. A repeated cooldown extends the wait without resetting the budget.
+- Other failures, cancellations and interrupted categories are not automatically
+  repeated. Other unstarted categories can continue when the source is available.
 - Restarts recover the journal. Only the current day's missed work catches up;
   older days are skipped. A running category can finish across midnight;
   remaining categories are admitted only for the current eligible day.
-- Pause stops further automatic category starts and lets the active category
-  finish. The existing job-cancellation action can stop that category explicitly.
+- Pause stops further daily category starts and lets the active category finish.
+  Queued source recoveries are independent and have their own **Cancel retry**
+  control. The existing job-cancellation action can stop an active category.
 
 Last/next-run status and category outcomes are private. No external alert
 integration is configured. Operate one server process per data directory.

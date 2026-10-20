@@ -10,6 +10,8 @@ import { EMPTY_STATE, Store, type StoredListing } from './store.ts';
 import type { LaptopSpecRequest, MemoryPartRequest, MemoryTypeLookup } from './techapi.ts';
 import { laptopSpecRequest } from './laptop-specs.ts';
 import { dailyScanStatus } from './scheduler.ts';
+import type { ScanRetry, SourceCooldown } from '../shared/types.ts';
+import { activeCooldown, SourceCooldownError } from './source-cooldown.ts';
 
 const POOL_AGE_MS = 6 * 60 * 60 * 1000;
 const AUTO_COHORTS = 12;
@@ -18,7 +20,7 @@ type Source = Pick<ChototClient, 'search' | 'detail'>;
 type MemoryCatalog = MemoryTypeLookup & { warm?(parts: MemoryPartRequest[], signal?: AbortSignal): Promise<void>;
   warmLaptops?(parts: LaptopSpecRequest[], signal?: AbortSignal): Promise<void> };
 interface MemoryFilters { minRamGb: number; minVramGb: number; includeUnknownMemory: boolean; }
-interface JobContext { job: RefreshJob; abort: AbortController; budget: RefreshBudget; settings: AppSettings; ai: LiteLLMClient | null; aiStopped: boolean; memory: MemoryFilters; pools: Map<string, AssessedListing[]>; scheduledDay?: string; }
+interface JobContext { job: RefreshJob; abort: AbortController; budget: RefreshBudget; settings: AppSettings; ai: LiteLLMClient | null; aiStopped: boolean; memory: MemoryFilters; pools: Map<string, AssessedListing[]>; scheduledDay?: string; retryId?: string; }
 
 function applicableMemory(category: Category, profile: HardwareProfile, filters: MemoryFilters): Array<{ capacity: number | null; minimum: number }> {
   const fields = category === 'gpu' ? [] : [{ capacity: profile.ramGb, minimum: filters.minRamGb }];
@@ -81,7 +83,8 @@ export class FlipperService {
   private stopping = false;
   private pending = new Set<Promise<unknown>>();
   private probeAbort: AbortController | null = null;
-  constructor(readonly store: Store, private source: Source = new ChototClient(), private memoryCatalog?: MemoryCatalog) {}
+  constructor(readonly store: Store, private source: Source = new ChototClient({ cooldownStore: store }), private memoryCatalog?: MemoryCatalog,
+    private now: () => Date = () => new Date()) {}
 
   private memoryAssessment(raw: RawListing, assessment: Assessment): Assessment {
     return enrichComputerAssessment(raw, assessment, this.memoryCatalog);
@@ -112,9 +115,27 @@ export class FlipperService {
       lastError: this.aiError, totalCostUsd: this.store.totalCost() };
   }
   bootstrap(): AdminBootstrapResponse { return { access: 'admin', settings: this.store.getSettings(), ai: this.aiStatus(), schedule: this.scheduleStatus(), searches: this.store.searches(), counts: this.store.counts() }; }
-  scheduleStatus(now = new Date()) { return dailyScanStatus(this.store, this.activeJob(), this.deploymentStatus().busy, now); }
-  configureDailyScans(enabled: boolean, now = new Date()) {
+  scheduleStatus(now = this.now()) { return dailyScanStatus(this.store, this.activeJob(), this.deploymentStatus().busy, now); }
+  configureDailyScans(enabled: boolean, now = this.now()) {
     this.ensureWorkAllowed(); this.store.configureDailyScans(enabled, now); return this.scheduleStatus(now);
+  }
+  /** Private operator recovery for attempts made before durable retry support. */
+  recoverScanRetry(job: RefreshJob, budgetUsd: number, cooldown: SourceCooldown): ScanRetry {
+    this.ensureWorkAllowed();
+    if (this.active || this.aiProbeRunning) throw new Error('Wait for the active refresh or AI probe before restoring a retry');
+    const settings = this.store.getSettings();
+    if (job.status !== 'failed' || !job.completedAt) throw new Error('Only a finalized failed refresh can be recovered');
+    if (!Number.isFinite(budgetUsd) || budgetUsd < 0 || budgetUsd > settings.aiBudgetUsd) throw new Error('Recovery cannot increase the configured manual budget');
+    job = { ...job, query: normalize(job.query) };
+    const pending = this.store.pendingScanRetry(job.category, job.query);
+    if (pending && pending.originalJobId !== job.id) throw new Error('A refresh retry is already queued for this category and search');
+    const persisted = this.store.recordSourceCooldown(cooldown);
+    return this.store.deferScanRetry(job, { ...settings, scanLimit: job.target, aiBudgetUsd: budgetUsd }, persisted, null);
+  }
+  cancelScanRetry(id: string): ScanRetry { this.ensureWorkAllowed(); return this.store.cancelScanRetry(id); }
+  private ensureSourceAvailable(now = this.now()): void {
+    const cooldown = activeCooldown(this.store.sourceCooldown(), now);
+    if (cooldown) throw new SourceCooldownError(cooldown);
   }
   private publicSettings(): PublicSettings {
     const { minRamGb, minVramGb, includeUnknownMemory, discountPercent, minComparables } = this.store.getSettings();
@@ -253,12 +274,25 @@ export class FlipperService {
     this.ensureWorkAllowed();
     if (this.active) throw new Error('A refresh is already running. Wait for it or cancel it first.');
     if (this.aiProbeRunning) throw new Error('Wait for the active AI probe before starting a refresh or analysis');
+    this.ensureSourceAvailable();
+    if (this.store.pendingScanRetry(category, normalize(query))) throw new Error('A refresh retry is already queued for this category and search');
     const settings = this.store.getSettings();
     return this.createJob(category, query, settings, limit, memory);
   }
   /** Claims only after the shared job/probe/maintenance gate, with no await gap. */
-  tryStartDailyRefresh(now = new Date()): RefreshJob | null {
+  tryStartDailyRefresh(now = this.now()): RefreshJob | null {
     if (this.stopping || this.active || this.aiProbeRunning || this.store.deploymentMaintenanceActive()) return null;
+    if (activeCooldown(this.store.sourceCooldown(), now)) return null;
+    const recovery = this.store.claimScanRetry(now);
+    if (recovery) {
+      const { retry, settings } = recovery;
+      const context = this.createJob(retry.category, retry.query, settings, retry.job.target, {}, now, retry);
+      context.retryId = retry.id;
+      if (retry.dailyDay) context.scheduledDay = retry.dailyDay;
+      this.store.recordScanRetry(retry.id, context.job, null);
+      if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, context.job);
+      this.launchRefresh(context); return context.job;
+    }
     const claim = this.store.claimDailyScan(this.store.getSettings(), now);
     if (!claim) return null;
     const context = this.createJob(claim.attempt.category, '', claim.settings, undefined, {}, now);
@@ -275,16 +309,17 @@ export class FlipperService {
     });
   }
   private createJob(category: Category, query: string, settings: AppSettings, limit?: number,
-    memory: Partial<MemoryFilters> = {}, now = new Date()): JobContext {
+    memory: Partial<MemoryFilters> = {}, now = this.now(), retry?: ScanRetry): JobContext {
     const job: RefreshJob = { id: randomUUID(), category, query: normalize(query), status: 'collecting', message: 'Collecting live Da Nang listings',
-      scanned: 0, target: limit ?? settings.scanLimit, assessed: 0, benchmarked: 0, totalAvailable: null, requestCount: 0, aiCostUsd: 0,
-      error: null, startedAt: now.toISOString(), completedAt: null };
+      scanned: 0, target: limit ?? settings.scanLimit, assessed: 0, benchmarked: 0, totalAvailable: null, requestCount: 0, aiCostUsd: retry?.spentUsd ?? 0,
+      error: null, startedAt: now.toISOString(), completedAt: null, ...(retry ? { retryOf: retry.originalJobId } : {}) };
     const key = settings.aiEnabled ? this.store.getKey() : '';
-    const context: JobContext = { job, abort: new AbortController(), budget: new RefreshBudget(settings.aiBudgetUsd), settings,
+    const context: JobContext = { job, abort: new AbortController(), budget: new RefreshBudget(settings.aiBudgetUsd, retry?.spentUsd), settings,
       memory: { minRamGb: memory.minRamGb ?? settings.minRamGb, minVramGb: memory.minVramGb ?? settings.minVramGb,
         includeUnknownMemory: memory.includeUnknownMemory ?? settings.includeUnknownMemory }, pools: new Map(),
       ai: key ? new LiteLLMClient({ key, onReceipt: (receipt) => {
         this.store.addReceipt(receipt); job.aiCostUsd = context.budget.spent;
+        if (context.retryId) this.store.recordScanRetry(context.retryId, job, this.aiError);
         if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, job);
       } }) : null, aiStopped: false };
     this.clearAIStatus(); this.active = context; this.jobs.set(job.id, job);
@@ -335,6 +370,7 @@ export class FlipperService {
       detail.attributes._detailedAt = new Date().toISOString(); return detail;
     } catch (error) {
       if (context.abort.signal.aborted) throw error;
+      if (error instanceof SourceCooldownError) throw error;
       // A vanished listing is retained in history and cannot be presented as a fresh eligible candidate.
       if (/404|410/.test(error instanceof Error ? error.message : '')) return { ...raw, condition: 'unknown', attributes: { ...raw.attributes, _sourceUnavailable: true } };
       return { ...raw, attributes: { ...raw.attributes, _detailError: error instanceof Error ? error.message : 'Detail request failed' } };
@@ -417,12 +453,21 @@ export class FlipperService {
     job.status = cancelled ? 'cancelled' : 'failed';
     job.error = cancelled ? null : error instanceof Error ? error.message : 'Marketplace refresh failed';
     job.message = cancelled ? 'Refresh cancelled; retained previously observed results' : 'Refresh failed; retained timestamped results';
+    if (!cancelled && coverage && error instanceof SourceCooldownError) {
+      job.aiCostUsd = context.budget.spent;
+      const cooldown = this.store.recordSourceCooldown(error.cooldown);
+      const retry = this.store.deferScanRetry(job, { ...context.settings, ...context.memory }, cooldown, context.scheduledDay ?? null, context.retryId);
+      context.retryId = retry.id;
+      job.message = `Refresh deferred by Chợ Tốt; automatic retry after ${cooldown.until} within the original AI allowance`;
+    }
     const previous = this.store.coverage(job.category, job.query);
     if (coverage && !cancelled) this.store.saveCoverage(previous ? { ...previous, error: job.error }
       : { category: job.category, query: job.query, scanned: 0, totalAvailable: null, limit: job.target, completedAt: new Date().toISOString(), error: job.error, requestCount: job.requestCount });
   }
   private finish(context: JobContext): void {
-    context.job.completedAt = new Date().toISOString(); context.job.aiCostUsd = context.budget.spent;
+    context.job.completedAt = this.now().toISOString(); context.job.aiCostUsd = context.budget.spent;
+    if (context.retryId) this.store.recordScanRetry(context.retryId, context.job,
+      this.aiError ? `AI unavailable: ${this.aiError}` : this.budgetLimited ? 'AI refresh budget exhausted; conservative parsing continued' : null);
     if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, context.job,
       this.aiError ? `AI unavailable: ${this.aiError}` : this.budgetLimited ? 'AI refresh budget exhausted; conservative parsing continued' : null);
     if (this.active === context) this.active = null;

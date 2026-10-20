@@ -34,9 +34,11 @@ export class RefreshBudget {
   #reserved = 0;
   #sealed = false;
 
-  constructor(limit: number) {
+  constructor(limit: number, spentUsd = 0) {
     if (!Number.isFinite(limit) || limit < 0) throw new Error('AI budget must be a non-negative dollar amount.');
+    if (!Number.isFinite(spentUsd) || spentUsd < 0) throw new Error('Previous AI spending must be a non-negative dollar amount.');
     this.limit = limit;
+    this.#spent = spentUsd;
   }
 
   get spent(): number { return this.#spent; }

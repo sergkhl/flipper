@@ -1,6 +1,7 @@
 import type { Category, DailyScanStatus, RefreshJob } from '../shared/types.ts';
 import type { Store } from './store.ts';
 import type { FlipperService } from './service.ts';
+import { activeCooldown } from './source-cooldown.ts';
 
 export const DAILY_SCAN_ZONE = 'Asia/Ho_Chi_Minh';
 export const DAILY_SCAN_CATEGORIES: readonly Category[] = ['laptop', 'desktop', 'gpu'];
@@ -28,7 +29,12 @@ export function dailyScanStatus(store: Store, active: RefreshJob | null, busy: b
   const eligible = control.enabled && control.firstDueAt !== null && Date.parse(control.firstDueAt) <= now.getTime()
     && vietnamNoon(now) <= now.getTime() && today.length < DAILY_SCAN_CATEGORIES.length;
   const running = attempts.some(attempt => attempt.status === 'running');
+  const cooldown = activeCooldown(store.sourceCooldown(), now), retries = store.scanRetries();
+  for (const retry of retries) if (active && retry.job.id === active.id) {
+    retry.job = { ...active }; retry.spentUsd = Math.max(retry.spentUsd, active.aiCostUsd);
+  }
   const state = !control.enabled ? 'disabled' : running ? 'running'
+    : cooldown ? 'cooldown'
     : eligible && store.deploymentMaintenanceActive() ? 'maintenance' : eligible && busy ? 'busy'
     : eligible ? 'due' : 'scheduled';
   return {
@@ -36,7 +42,7 @@ export function dailyScanStatus(store: Store, active: RefreshJob | null, busy: b
     perCategoryBudgetUsd: DAILY_SCAN_CATEGORY_BUDGET, dailyBudgetUsd: DAILY_SCAN_BUDGET,
     nextRunAt: !control.enabled ? null : eligible ? new Date(vietnamNoon(now)).toISOString()
       : control.firstDueAt && Date.parse(control.firstDueAt) > now.getTime() ? control.firstDueAt : nextVietnamNoon(now),
-    state, lastRunDay, attempts,
+    state, lastRunDay, attempts, cooldown, retries,
   };
 }
 
@@ -48,6 +54,7 @@ export class DailyScanner {
   start(): void {
     if (this.started) return;
     this.service.store.interruptDailyScans(this.now());
+    this.service.store.interruptScanRetries(this.now());
     this.started = true;
     this.wake();
   }

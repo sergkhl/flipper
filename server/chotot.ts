@@ -1,4 +1,6 @@
 import type { Condition, HardwareKind, RawListing } from '../shared/types.ts';
+import type { SourceCooldown } from '../shared/types.ts';
+import { activeCooldown, retryAfterMs, SourceCooldownError, type CooldownStore } from './source-cooldown.ts';
 
 type ObjectValue = Record<string, unknown>;
 type SearchInput = {
@@ -239,10 +241,21 @@ export class ChototClient {
   private readonly pauseMs: number;
   private nextRequestAt = 0;
   private requestQueue: Promise<void> = Promise.resolve();
+  private cooldown: SourceCooldown | null = null;
+  private readonly cooldownStore?: CooldownStore;
+  private readonly now: () => Date;
 
-  constructor({ fetch: fetcher = globalThis.fetch, pauseMs = 350 }: { fetch?: typeof fetch; pauseMs?: number } = {}) {
+  constructor({ fetch: fetcher = globalThis.fetch, pauseMs = 350, cooldownStore, now = () => new Date() }:
+    { fetch?: typeof fetch; pauseMs?: number; cooldownStore?: CooldownStore; now?: () => Date } = {}) {
     this.fetcher = fetcher;
     this.pauseMs = Math.max(0, Number.isFinite(pauseMs) ? pauseMs : 350);
+    this.cooldownStore = cooldownStore;
+    this.now = now;
+  }
+
+  private assertAvailable(): void {
+    const cooldown = activeCooldown(this.cooldownStore?.sourceCooldown() ?? this.cooldown, this.now());
+    if (cooldown) throw new SourceCooldownError(cooldown);
   }
 
   async search({ kind: requestedKind, location, query = '', page = 1, signal }: SearchInput): Promise<{ items: RawListing[]; total: number | null }> {
@@ -309,9 +322,11 @@ export class ChototClient {
     try {
       await previous;
       signal?.throwIfAborted();
+      this.assertAvailable();
       // Recheck against actual dispatch time after delayed or early timer wakeups.
       while (this.nextRequestAt > performance.now()) await wait(this.nextRequestAt - performance.now(), signal);
       signal?.throwIfAborted();
+      this.assertAvailable();
       return release;
     } catch (error) { release(); throw error; }
   }
@@ -338,14 +353,17 @@ export class ChototClient {
         const retryable = response.status === 429 || (response.status >= 500 && response.status <= 599);
         if (retryable) {
           await response.body?.cancel();
-          if (attempt === 2) throw new Error(`Chợ Tốt is temporarily unavailable (HTTP ${response.status}). Try refreshing later.`);
-          const retryAfter = response.headers.get('retry-after');
-          const parsed = retryAfter === null ? NaN : /^\d+(?:\.\d+)?$/.test(retryAfter)
-            ? Number(retryAfter) * 1_000 : Date.parse(retryAfter) - Date.now();
-          if (Number.isFinite(parsed) && parsed > 5_000) {
-            throw new Error('Chợ Tốt requested a longer rate-limit wait. Try refreshing later.');
+          const now = this.now(), parsed = retryAfterMs(response.headers, now);
+          const delay = parsed ?? (response.status === 429 ? 60_000 : null);
+          if (delay !== null && delay > 0) {
+            const until = new Date(Math.min(8.64e15, now.getTime() + Math.ceil(delay))).toISOString();
+            const cooldown = { until, observedAt: now.toISOString(), status: response.status };
+            this.cooldown = this.cooldownStore?.recordSourceCooldown(cooldown)
+              ?? (this.cooldown && Date.parse(this.cooldown.until) > Date.parse(until) ? this.cooldown : cooldown);
+            if (delay > 5_000 || attempt === 2) throw new SourceCooldownError(this.cooldown);
           }
-          retryDelay = Number.isFinite(parsed) ? Math.max(0, parsed) : 500 * 2 ** attempt;
+          if (attempt === 2) throw new Error(`Chợ Tốt is temporarily unavailable (HTTP ${response.status}). Try refreshing later.`);
+          retryDelay = delay ?? 500 * 2 ** attempt;
         } else {
           if (!response.ok) {
             await response.body?.cancel();
@@ -361,6 +379,7 @@ export class ChototClient {
         }
       } catch (error) {
         signal?.throwIfAborted();
+        if (error instanceof SourceCooldownError) throw error;
         if (controller.signal.aborted) throw new Error('Chợ Tốt request timed out after 15 seconds.');
         if (error instanceof Error && /^Chợ Tốt|^This Chợ Tốt/.test(error.message)) throw error;
         throw new Error('Could not read Chợ Tốt. Check the connection and try refreshing again.');
