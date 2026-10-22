@@ -8,8 +8,9 @@ nationwide Chợ Tốt asking prices, then shows the specifications, comparable
 offers and uncertainty behind each reference. The application is
 [MIT-licensed](LICENSE); phones are outside its current scope.
 
-**[Open the live app](https://flipper.globesoul.com/)** ·
-[Run locally](#run-locally) · [Price methodology](#how-prices-are-compared)
+- [Open the live app](https://flipper.globesoul.com/)
+- [Run locally](#run-locally)
+- [Price methodology](#how-prices-are-compared)
 
 The public app is a read-only market browser. Collection, optional AI calls,
 saved items and settings belong to the private administrator workspace.
@@ -89,9 +90,9 @@ remain explicit.
 
 ## Daily scans
 
-Automatic scanning is **disabled on new installations**. Enable it explicitly
-under **Settings & AI → Daily market scans** in the local/private administrator
-workspace. The configured server must be running; no browser session is needed.
+Automatic scanning is **disabled on new installations**. In the local/private
+administrator workspace, open **Settings & AI** and enable **Daily market scans**.
+The configured server must be running; no browser session is needed.
 
 The schedule starts at **12:00 PM (noon), Asia/Ho_Chi_Minh (UTC+7)**. It runs full
 laptop, desktop and graphics-card refreshes sequentially, using the same bounded
@@ -162,7 +163,7 @@ integration is configured. Operate one server process per data directory.
   displayed and lower confidence **without blocking scoring**. Each computer
   advertisement and seller contributes once; five GPU prices combined with one
   base PC are still one PC observation. The weakest computer/part pool determines
-  whether the reference is indicative (3–4) or scoreable (at least 5, or your
+  whether the reference is indicative (3 or 4) or scoreable (at least 5, or your
   higher configured minimum). Explicitly linked seller accounts are deduplicated.
   The evidence drawer shows every source price, addition, deduction and missing detail.
 - An ad's separately quoted with-GPU and without-GPU configurations retain their
