@@ -1,9 +1,54 @@
 # Flipper
 
-[MIT-licensed](LICENSE) personal market discovery for used laptops, desktop
-computers and standalone graphics cards on Chợ Tốt. Buying candidates come from
-Da Nang; matching nationwide used offers supply asking-price references.
-Phones are outside the current scope.
+**Find used hardware with price evidence you can inspect.**
+
+Flipper turns used laptops, desktops and graphics-card listings into a searchable
+workspace for personal buying. It compares candidates in Da Nang with matching
+nationwide Chợ Tốt asking prices, then shows the specifications, comparable
+offers and uncertainty behind each reference. The application is
+[MIT-licensed](LICENSE); phones are outside its current scope.
+
+**[Open the live app](https://flipper.globesoul.com/)** ·
+[Run locally](#run-locally) · [Price methodology](#how-prices-are-compared)
+
+The public app is a read-only market browser. Collection, optional AI calls,
+saved items and settings belong to the private administrator workspace.
+
+![Flipper's read-only market view with synthetic graphics-card listings, memory filters and asking-price comparisons](docs/images/flipper-market-demo.jpg)
+
+*The screenshot uses synthetic listings and illustrative prices in an isolated
+local instance. It contains no marketplace seller data or photographs.*
+
+## What it does
+
+- **Shortlist relevant hardware.** Browse three categories and filter by model,
+  memory, district, asking price and discount from a supported reference.
+- **Explain a comparison.** Open the evidence drawer to inspect source claims,
+  accepted and rejected offers, component adjustments and observed price history.
+- **Keep uncertainty visible.** Missing memory capacity, contradictory
+  specifications and insufficient or stale comparisons remain explicit.
+- **Retain a useful workspace.** Keep saved searches, bookmarks and previous
+  observations through refreshes. Optional daily scans have durable scheduling,
+  request budgets and source-cooldown recovery.
+
+These are comparisons of advertised asking prices, not completed-sale values,
+physical-condition checks or resale-profit predictions.
+
+## How it is built
+
+The React and TypeScript UI connects to a Node.js API, with SQLite storing
+listings, comparisons, history and job state. Marketplace collection,
+hardware interpretation, pricing and scheduling have separate modules.
+
+Optional LiteLLM calls classify listings and extract specifications supported by
+seller text. Deterministic code filters comparable offers and calculates price
+references and discounts; the app also works without a model key. The hosted
+API separates anonymous market reads from private administrative actions.
+
+The [fixture-based tests](test/) exercise parsing, hardware ambiguity, price
+evidence, provider budgets, scheduler recovery and public/private API boundaries.
+See [verification](docs/verification.md) for what those checks establish, and
+[the API contract](docs/api-contract.md) for the client/server boundary.
 
 ## Run locally
 
