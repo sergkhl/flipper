@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import type { AIReceipt, Assessment, Evidence, HardwareKind, HardwareProfile, RawListing } from '../shared/types.ts';
 import { DECIDER_MODEL, EMPTY_PROFILE, MIMO_MODEL, liteLLMEndpoints, type LiteLLMEndpoints } from './config.ts';
@@ -6,7 +7,10 @@ import { DECIDER_MODEL, EMPTY_PROFILE, MIMO_MODEL, liteLLMEndpoints, type LiteLL
 const MIMO_INPUT_PRICE = 0.25; // Conservative USD-per-million ceilings for the fixed MiMo route.
 const MIMO_OUTPUT_PRICE = 0.5;
 const DECIDER_INPUT_PRICE = 0.05;
-const MAX_OUTPUT_TOKENS = 1_800;
+const MAX_OUTPUT_TOKENS = 4_096;
+const RETRY_OUTPUT_TOKENS = 8_192;
+const RETRY_DELAY_MS = 250;
+const MAX_RETRY_DELAY_MS = 5_000;
 const MAX_DESCRIPTION_BYTES = 12_000;
 const MAX_RESPONSE_BYTES = 256_000;
 const kinds = ['laptop', 'desktop', 'gpu', 'ram', 'cpu', 'ssd', 'other', 'wanted'] as const;
@@ -98,41 +102,18 @@ const extractionSchema = z.object({
 }).strict();
 type Extraction = z.infer<typeof extractionSchema>;
 
-const nullableStringJSON = { type: ['string', 'null'] };
-const nullableNumberJSON = { type: ['number', 'null'] };
-const profileProperties = {
-  model: nullableStringJSON, cpu: nullableStringJSON, gpu: nullableStringJSON,
-  gpuClass: { type: ['string', 'null'], enum: ['desktop', 'mobile', 'integrated', null] },
-  vramGb: nullableNumberJSON, gpuMemoryType: nullableStringJSON, ramGb: nullableNumberJSON, ramType: nullableStringJSON,
-  ramFormFactor: { type: ['string', 'null'], enum: ['DIMM', 'SODIMM', 'soldered', null] },
-  ramSpeedMhz: nullableNumberJSON, storageGb: nullableNumberJSON, storageType: nullableStringJSON,
-  quantity: nullableNumberJSON, perUnitGb: nullableNumberJSON,
-  priceBasis: { type: 'string', enum: ['item', 'each', 'bundle', 'deposit', 'unknown'] },
-};
-const extractionJSONSchema = {
-  type: 'object', additionalProperties: false,
-  properties: {
-    kind: { type: 'string', enum: kinds },
-    profile: { type: 'object', additionalProperties: false, properties: profileProperties, required: Object.keys(profileProperties) },
-    flags: {
-      type: 'object', additionalProperties: false,
-      properties: Object.fromEntries(flagNames.map(name => [name, { type: 'boolean' }])), required: flagNames,
-    },
-    unknowns: { type: 'array', items: {
-      type: 'object', additionalProperties: false,
-      properties: { field: { type: 'string', enum: unknownFields }, reason: { type: 'string', minLength: 1, maxLength: 220 } },
-      required: ['field', 'reason'],
-    } },
-    conflicts: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 220 } },
-    evidence: {
-      type: 'array', items: {
-        type: 'object', additionalProperties: false,
-        properties: { field: { type: 'string' }, quote: { type: 'string' } }, required: ['field', 'quote'],
-      },
-    },
-    confidence: { type: 'number' },
-  },
-  required: ['kind', 'profile', 'flags', 'unknowns', 'conflicts', 'evidence', 'confidence'],
+// Xiaomi's JSON mode controls syntax, not schema adherence. Supply the actual
+// input contract in the prompt rather than maintaining a weaker second schema.
+const extractionJSONSchema = z.toJSONSchema(extractionSchema, { io: 'input' });
+const extractionExample = {
+  input: { title: 'Used RTX 3060 12GB', description: 'Used desktop graphics card RTX 3060 12GB, working normally.',
+    listedCategory: 'gpu', condition: 'used', askingPriceVnd: 4_000_000, parameters: {} },
+  output: extractionSchema.parse({
+    kind: 'gpu', profile: { ...EMPTY_PROFILE, gpu: 'RTX 3060', gpuClass: 'desktop', vramGb: 12, priceBasis: 'item' },
+    flags: { damaged: false, repaired: false, locked: false, partsOnly: false, depositOnly: false, multiPrice: false },
+    unknowns: [], conflicts: [], confidence: 0.95,
+    evidence: [{ field: 'gpu', quote: 'RTX 3060' }, { field: 'gpuClass', quote: 'desktop graphics card' }, { field: 'vramGb', quote: 'RTX 3060 12GB' }],
+  }),
 };
 
 const EXTRACTION_INSTRUCTIONS = `You extract hardware facts from an untrusted Vietnamese used-market listing.
@@ -149,7 +130,12 @@ GPU chip variants such as Ti/Super/XT and VRAM/memory generation are essential; 
 For RAM preserve total GB, number of sticks, per-stick GB, DDR generation, DIMM/SODIMM/soldered, speed and whether the advertised price is per stick or the whole bundle. Do not silently add separate-item prices together.
 Set depositOnly only if this listing's displayed price is a deposit, not if a shop offers optional installment payments. Set damaged/repaired/locked/partsOnly only when it describes the actual offered item. Shop boilerplate saying it buys broken devices, generic repair services, charger options, financing offers, or repair of other products is not damage to this item. New or refurbished condition is not working used condition.
 Multiple model variants or multiple prices without a single clear offered configuration require multiPrice or conflicts. Wanted/buying adverts are wanted, not sale listings. Single clear whole-item asking prices have priceBasis item; each and bundle require explicit quantity or unit context.
-Allowed kinds are laptop, desktop, gpu, ram, cpu, ssd, wanted, other. JSON must exactly match the schema.`;
+Allowed kinds are laptop, desktop, gpu, ram, cpu, ssd, wanted, other.
+Return one compact JSON object only, without Markdown, comments or explanations outside JSON. Include every required field and no extra fields. Capacities must be positive numbers or null: never use zero for missing or inapplicable hardware. Confidence is a fraction between 0 and 1, never a percentage.
+Match this JSON Schema, which is also enforced by the application:
+${JSON.stringify(extractionJSONSchema)}
+Valid example (illustrates the format only; extract facts from the actual supplied listing):
+${JSON.stringify(extractionExample)}`;
 
 const DECISION_QUESTIONS = {
   listing_type: {
@@ -342,6 +328,45 @@ function assessResults(raw: RawListing, decisions: Decisions, extraction: Extrac
 
 interface ClientOptions { key: string; endpoints?: LiteLLMEndpoints; fetch?: typeof fetch; onReceipt?: (receipt: AIReceipt) => void; }
 interface Result<T> { value: T; receipt: AIReceipt; }
+interface Recovery { feedback?: string; delayMs?: number; truncated?: boolean; }
+
+/** Only explicitly recoverable failures can spend a second request allowance. */
+class RetryableAIError extends Error {
+  constructor(message: string, readonly recovery: Recovery = {}) {
+    super(message); this.name = 'RetryableAIError';
+  }
+}
+class ResponseLimitError extends Error {}
+
+function validationFeedback(error: z.ZodError): string {
+  const fields = new Set<string>(['kind', 'profile', 'flags', 'unknowns', 'conflicts', 'evidence', 'field', 'reason', 'quote', 'confidence',
+    ...unknownFields, ...flagNames]);
+  // Zod messages and unrecognized keys can contain provider-controlled text.
+  // Expose only known contract paths and issue codes, never values or raw JSON.
+  return error.issues.slice(0, 6).map(issue => {
+    const path = issue.path.map(part => typeof part === 'number' ? part : fields.has(String(part)) ? part : '?').join('.') || 'root';
+    return `${path} (${issue.code})`;
+  }).join(', ');
+}
+
+function requestFailure(model: string, error: unknown, signal: AbortSignal, caller?: AbortSignal): Error {
+  if (caller?.aborted) return new Error(`LiteLLM (${model}) request was cancelled.`);
+  if (signal.aborted || (error instanceof Error && error.name === 'TimeoutError')) {
+    return new RetryableAIError(`LiteLLM (${model}) request timed out after ${model === MIMO_MODEL ? 120 : 45} seconds.`);
+  }
+  const cause = error instanceof Error ? error.cause : null;
+  const code = cause && typeof cause === 'object' && 'code' in cause ? cause.code : null;
+  const safeCodes = ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET'];
+  const detail = typeof code === 'string' && safeCodes.includes(code) ? ` (${code})` : '';
+  return new RetryableAIError(`LiteLLM (${model}) could not be reached; connection failed${detail}.`);
+}
+
+function retryDelay(header: string | null): number {
+  if (!header?.trim()) return RETRY_DELAY_MS;
+  const seconds = Number(header);
+  const milliseconds = Number.isFinite(seconds) ? seconds * 1_000 : Date.parse(header) - Date.now();
+  return Number.isFinite(milliseconds) ? Math.max(RETRY_DELAY_MS, milliseconds) : RETRY_DELAY_MS;
+}
 
 export class LiteLLMClient {
   readonly #key: string;
@@ -384,11 +409,13 @@ export class LiteLLMClient {
     };
     const results: Array<{ model: string; ok: boolean; error?: string; costUsd?: number }> = [];
     for (const model of [DECIDER_MODEL, MIMO_MODEL]) {
+      const before = budget.spent;
       try {
-        const result = model === DECIDER_MODEL ? await this.#decide(probe, budget, signal) : await this.#extract(probe, budget, signal);
-        results.push({ model, ok: true, costUsd: result.receipt.costUsd });
+        if (model === DECIDER_MODEL) await this.#decide(probe, budget, signal);
+        else await this.#extract(probe, budget, signal);
+        results.push({ model, ok: true, costUsd: budget.spent - before });
       } catch (error) {
-        results.push({ model, ok: false, error: error instanceof Error ? error.message : 'LiteLLM request failed.' });
+        results.push({ model, ok: false, error: error instanceof Error ? error.message : 'LiteLLM request failed.', costUsd: budget.spent - before });
       }
     }
     return results;
@@ -401,86 +428,134 @@ export class LiteLLMClient {
     };
     // Decisions may evaluate context once per question. Count UTF-8 bytes per question plus protocol overhead.
     const tokenCeiling = Buffer.byteLength(JSON.stringify(body), 'utf8') * Object.keys(DECISION_QUESTIONS).length + 4_096;
-    const response = await this.#request(this.#endpoints.decisionsUrl, DECIDER_MODEL, body, tokenCeiling * DECIDER_INPUT_PRICE / 1_000_000, budget, signal);
-    const parsed = decisionsSchema.safeParse(response.value);
-    if (!parsed.success) throw new Error('Decider returned malformed or incomplete probability decisions.');
-    const choice = parsed.data.answers.listing_type;
-    const probabilities = kinds.map(kind => choice.probabilities[kind]);
-    const total = probabilities.reduce((sum, value) => sum + (value ?? 0), 0);
-    if (probabilities.some(value => value === undefined) || Math.abs(total - 1) > 0.03
-      || choice.probabilities[choice.choice] < Math.max(...probabilities) - 1e-6) {
-      throw new Error('Decider returned inconsistent listing-type probabilities.');
-    }
-    return { value: parsed.data.answers, receipt: response.receipt };
+    return this.#withRetry(async () => {
+      const response = await this.#request(this.#endpoints.decisionsUrl, DECIDER_MODEL, body, tokenCeiling * DECIDER_INPUT_PRICE / 1_000_000, budget, signal);
+      const parsed = decisionsSchema.safeParse(response.value);
+      if (!parsed.success) throw new RetryableAIError('Decider returned malformed or incomplete probability decisions.');
+      const choice = parsed.data.answers.listing_type;
+      const probabilities = kinds.map(kind => choice.probabilities[kind]);
+      const total = probabilities.reduce((sum, value) => sum + (value ?? 0), 0);
+      if (probabilities.some(value => value === undefined) || Math.abs(total - 1) > 0.03
+        || choice.probabilities[choice.choice] < Math.max(...probabilities) - 1e-6) {
+        throw new RetryableAIError('Decider returned inconsistent listing-type probabilities.');
+      }
+      return { value: parsed.data.answers, receipt: response.receipt };
+    }, signal);
   }
 
   async #extract(raw: RawListing, budget: RefreshBudget, signal?: AbortSignal): Promise<Result<Extraction>> {
-    const body = {
-      model: MIMO_MODEL, temperature: 0, max_tokens: MAX_OUTPUT_TOKENS, stream: false,
-      extra_body: { thinking: { type: 'disabled' } },
-      messages: [
-        { role: 'system', content: EXTRACTION_INSTRUCTIONS },
-        { role: 'user', content: JSON.stringify(inputState(raw)) },
-      ],
-      response_format: { type: 'json_schema', json_schema: { name: 'listing_hardware_evidence', strict: true, schema: extractionJSONSchema } },
-    };
-    const tokenCeiling = Buffer.byteLength(JSON.stringify(body), 'utf8') + 4_096;
-    const maxCost = (tokenCeiling * MIMO_INPUT_PRICE + MAX_OUTPUT_TOKENS * MIMO_OUTPUT_PRICE) / 1_000_000;
-    const response = await this.#request(this.#endpoints.chatCompletionsUrl, MIMO_MODEL, body, maxCost, budget, signal);
-    const envelope = z.object({ choices: z.array(z.object({
-      finish_reason: z.string().nullable().optional(), message: z.object({ content: z.string().max(64_000), refusal: z.string().nullable().optional() }),
-    })).min(1) }).safeParse(response.value);
-    if (!envelope.success) throw new Error('MiMo returned a malformed extraction response.');
-    const choice = envelope.data.choices[0];
-    if (choice.finish_reason !== 'stop' || choice.message.refusal) throw new Error('MiMo did not complete the requested hardware extraction.');
-    let decoded: unknown;
-    try { decoded = JSON.parse(choice.message.content); } catch { throw new Error('MiMo returned invalid hardware JSON.'); }
-    const parsed = extractionSchema.safeParse(decoded);
-    if (!parsed.success) throw new Error('MiMo returned unsupported or invalid hardware fields.');
-    return { value: parsed.data, receipt: response.receipt };
+    return this.#withRetry(async recovery => {
+      const outputTokens = recovery?.truncated ? RETRY_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS;
+      const feedback = recovery?.feedback
+        ? `\nPrevious extraction failed local validation: ${recovery.feedback}. Extract again from the original listing, obeying the complete contract. Return the full JSON object.` : '';
+      const body = {
+        model: MIMO_MODEL, temperature: 0, max_tokens: outputTokens, stream: false,
+        extra_body: { thinking: { type: 'disabled' } },
+        messages: [
+          { role: 'system', content: EXTRACTION_INSTRUCTIONS + feedback },
+          { role: 'user', content: JSON.stringify(inputState(raw)) },
+        ],
+        response_format: { type: 'json_object' },
+      };
+      const tokenCeiling = Buffer.byteLength(JSON.stringify(body), 'utf8') + 4_096;
+      const maxCost = (tokenCeiling * MIMO_INPUT_PRICE + outputTokens * MIMO_OUTPUT_PRICE) / 1_000_000;
+      const response = await this.#request(this.#endpoints.chatCompletionsUrl, MIMO_MODEL, body, maxCost, budget, signal);
+      const envelope = z.object({ choices: z.array(z.object({
+        finish_reason: z.string().nullable().optional(), message: z.object({ content: z.string().max(64_000), refusal: z.string().nullable().optional() }),
+      })).min(1) }).safeParse(response.value);
+      if (!envelope.success) throw new RetryableAIError('MiMo returned a malformed extraction response.', { feedback: 'malformed extraction envelope' });
+      const choice = envelope.data.choices[0];
+      if (choice.message.refusal) throw new Error('MiMo refused the requested hardware extraction.');
+      if (choice.finish_reason === 'length') {
+        throw new RetryableAIError('MiMo hardware JSON was truncated at the output token limit.', { feedback: 'output was truncated; keep quotes and explanations short', truncated: true });
+      }
+      if (choice.finish_reason !== 'stop') throw new Error('MiMo did not complete the requested hardware extraction.');
+      let decoded: unknown;
+      try { decoded = JSON.parse(choice.message.content); }
+      catch { throw new RetryableAIError('MiMo returned invalid hardware JSON.', { feedback: 'invalid JSON syntax' }); }
+      const parsed = extractionSchema.safeParse(decoded);
+      if (!parsed.success) {
+        const feedback = validationFeedback(parsed.error);
+        throw new RetryableAIError(`MiMo returned unsupported or invalid hardware fields: ${feedback}.`, { feedback });
+      }
+      return { value: parsed.data, receipt: response.receipt };
+    }, signal);
+  }
+
+  async #withRetry<T>(work: (recovery?: Recovery) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    try { return await work(); }
+    catch (error) {
+      if (signal?.aborted || !(error instanceof RetryableAIError)) throw error;
+      await delay(error.recovery.delayMs ?? RETRY_DELAY_MS, undefined, { signal });
+      signal?.throwIfAborted();
+      // This second attempt is shared by transport and output recovery. A
+      // failure here escapes directly, so neither layer can multiply retries.
+      return work(error.recovery);
+    }
   }
 
   async #request(url: string, model: string, body: object, maxCostUsd: number, budget: RefreshBudget, signal?: AbortSignal): Promise<Result<unknown>> {
     signal?.throwIfAborted();
     const reservation = budget.reserve(maxCostUsd);
     const timeout = AbortSignal.timeout(model === MIMO_MODEL ? 120_000 : 45_000);
+    const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
     let response: Response;
     try {
       response = await this.#fetch(url, {
         method: 'POST', redirect: 'error',
         headers: { Authorization: `Bearer ${this.#key}`, 'Content-Type': 'application/json',
           ...(model === DECIDER_MODEL ? { 'X-OpenRouter-Title': 'Flipper local market research', 'X-OpenRouter-Metadata': 'enabled' } : {}) },
-        body: JSON.stringify(body), signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+        body: JSON.stringify(body), signal: requestSignal,
       });
-    } catch {
+    } catch (error) {
       reservation.settle();
-      throw new Error(signal?.aborted ? 'LiteLLM request was cancelled.' : 'LiteLLM could not be reached or the request timed out.');
+      throw requestFailure(model, error, requestSignal, signal);
     }
     if (!response.ok) {
       // Clear authentication/input rejection is not an accepted generation. Other failures retain a billing ceiling.
       if ([400, 401, 402, 403, 404, 413].includes(response.status)) reservation.release(); else reservation.settle();
       await response.body?.cancel().catch(() => undefined);
       const reason: Record<number, string> = { 401: 'authentication rejected', 402: 'insufficient credits', 403: 'access rejected', 404: 'model or route unavailable', 429: 'rate limited' };
-      throw new Error(`LiteLLM returned HTTP ${response.status}${reason[response.status] ? ` (${reason[response.status]})` : ''}.`);
+      const message = `LiteLLM (${model}) returned HTTP ${response.status}${reason[response.status] ? ` (${reason[response.status]})` : ''}.`;
+      const delayMs = retryDelay(response.headers.get('retry-after'));
+      if (([408, 429].includes(response.status) || response.status >= 500) && delayMs <= MAX_RETRY_DELAY_MS) {
+        throw new RetryableAIError(message, { delayMs });
+      }
+      throw new Error(message);
     }
     let data: unknown;
     try {
-      if (Number(response.headers.get('content-length')) > MAX_RESPONSE_BYTES) throw new Error('Response too large.');
+      if (Number(response.headers.get('content-length')) > MAX_RESPONSE_BYTES) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new ResponseLimitError();
+      }
       const reader = response.body?.getReader();
       if (!reader) throw new Error('Missing response.');
       const chunks: Uint8Array[] = [];
       let length = 0;
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        length += chunk.value.byteLength;
-        if (length > MAX_RESPONSE_BYTES) { await reader.cancel(); throw new Error('Response too large.'); }
-        chunks.push(chunk.value);
+      const cancel = () => { void reader.cancel().catch(() => undefined); };
+      requestSignal.addEventListener('abort', cancel, { once: true });
+      try {
+        requestSignal.throwIfAborted();
+        while (true) {
+          const chunk = await reader.read();
+          requestSignal.throwIfAborted();
+          if (chunk.done) break;
+          length += chunk.value.byteLength;
+          if (length > MAX_RESPONSE_BYTES) { await reader.cancel(); throw new ResponseLimitError(); }
+          chunks.push(chunk.value);
+        }
+      } finally {
+        requestSignal.removeEventListener('abort', cancel);
+        reader.releaseLock();
       }
       data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    } catch {
+    } catch (error) {
       reservation.settle();
-      throw new Error('LiteLLM returned an unreadable or oversized response.');
+      if (signal?.aborted || requestSignal.aborted) throw requestFailure(model, error, requestSignal, signal);
+      if (error instanceof ResponseLimitError) throw new Error(`LiteLLM (${model}) returned an oversized response.`);
+      if (error instanceof SyntaxError) throw new RetryableAIError(`LiteLLM (${model}) returned unreadable response JSON.`);
+      throw requestFailure(model, error, requestSignal, signal);
     }
     const tokenCount = z.number().finite().int().nonnegative();
     const usageSchema = model === MIMO_MODEL

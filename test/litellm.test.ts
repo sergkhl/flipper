@@ -65,6 +65,21 @@ function mockClient(deciderResult: unknown = decisions(), mimoResult: unknown = 
   return { client: new LiteLLMClient({ key: 'secret-fixture-key', endpoints: liteLLMEndpoints({}), fetch: mockedFetch, onReceipt: receipt => receipts.push(receipt) }), calls, receipts };
 }
 
+interface Call { url: string; body: Record<string, any>; signal?: AbortSignal | null; }
+function scriptedClient(steps: Array<Response | Error | ((call: Call) => Response | Promise<Response>)>) {
+  const calls: Call[] = [], receipts: AIReceipt[] = [];
+  const client = new LiteLLMClient({ key: 'hidden-fixture-key', endpoints: liteLLMEndpoints({}), onReceipt: receipt => receipts.push(receipt),
+    fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const call = { url: String(input), body: JSON.parse(String(init?.body)), signal: init?.signal };
+      calls.push(call);
+      const step = steps[calls.length - 1];
+      assert.ok(step, 'Unexpected extra AI request');
+      if (step instanceof Error) throw step;
+      return typeof step === 'function' ? step(call) : step;
+    }) as typeof fetch });
+  return { client, calls, receipts };
+}
+
 test('the two requested models use their own APIs and deterministic hardware evidence', async () => {
   const { client, calls, receipts } = mockClient();
   const budget = new RefreshBudget(0.25);
@@ -79,11 +94,11 @@ test('the two requested models use their own APIs and deterministic hardware evi
   assert.equal(calls[0].body.questions.deposit_only.type, 'noul');
   assert.equal(calls[1].url, 'http://localhost:4000/v1/chat/completions');
   assert.equal(calls[1].body.model, MIMO_MODEL);
-  assert.equal(calls[1].body.response_format.json_schema.strict, true);
+  assert.deepEqual(calls[1].body.response_format, { type: 'json_object' });
   assert.equal(calls[1].body.extra_body.thinking.type, 'disabled');
   assert.equal('provider' in calls[1].body, false);
   assert.equal('reasoning' in calls[1].body, false);
-  assert.equal(calls[1].body.max_tokens, 1_800);
+  assert.equal(calls[1].body.max_tokens, 4_096);
   assert.equal(calls[0].body.provider.max_price.prompt, 0.05);
   assert.ok(calls.every(call => call.headers.get('Authorization') === 'Bearer secret-fixture-key'));
   assert.equal(receipts.length, 2);
@@ -186,8 +201,8 @@ test('typed probability validation rejects malformed or inconsistent decisions b
   malformed.answers.listing_type.probabilities.gpu = 0.1;
   const { client, calls, receipts } = mockClient(malformed);
   await assert.rejects(client.assess(raw, new RefreshBudget(0.25)), /inconsistent listing-type probabilities/);
-  assert.equal(calls.length, 1);
-  assert.equal(receipts.length, 1); // The malformed result still consumed reported provider cost.
+  assert.equal(calls.length, 2);
+  assert.equal(receipts.length, 2); // Both rejected responses consumed reported provider cost.
 });
 
 test('unsolicited AI price estimates are rejected by the extraction schema', async () => {
@@ -442,4 +457,172 @@ test('Apple integrated graphics require an explicit source-supported GPU core-co
   assert.equal(eligible.eligibility, 'eligible');
   assert.equal(eligible.profile.gpu, 'M1 7-core GPU');
   assert.ok(eligible.evidence.some(item => item.field === 'gpu' && item.quote === 'M1 7-core GPU'));
+});
+
+test('MiMo receives numeric limits, null rules and a complete example in JSON-object mode', async () => {
+  const { client, calls } = mockClient();
+  await client.assess(raw, new RefreshBudget(0.25));
+  const prompt: string = calls[1]!.body.messages[0].content;
+  const contract = JSON.parse(prompt.split('Match this JSON Schema, which is also enforced by the application:\n')[1]!.split('\nValid example')[0]!);
+  const fields = contract.properties.profile.properties;
+  assert.deepEqual(fields.vramGb.anyOf, [{ type: 'number', exclusiveMinimum: 0, maximum: 65_536 }, { type: 'null' }]);
+  assert.equal(fields.ramSpeedMhz.anyOf[0].type, 'integer');
+  assert.equal(fields.ramSpeedMhz.anyOf[0].minimum, 100);
+  assert.equal(fields.quantity.anyOf[0].maximum, 64);
+  assert.deepEqual(contract.properties.confidence, { type: 'number', minimum: 0, maximum: 1 });
+  assert.equal(contract.additionalProperties, false);
+  assert.ok(contract.properties.profile.required.includes('ramGb'));
+  assert.match(prompt, /never use zero/);
+  assert.match(prompt, /"ramGb":null/);
+});
+
+test('a corrected zero capacity retries only extraction and preserves both paid receipts', async () => {
+  const invalid = extraction(); invalid.profile.ramGb = 0;
+  const { client, calls, receipts } = scriptedClient([reply(decisions()), reply(completion(invalid)), reply(completion())]);
+  const budget = new RefreshBudget(0.25);
+  assert.equal((await client.assess(raw, budget)).eligibility, 'eligible');
+  assert.deepEqual(calls.map(call => call.body.model), [DECIDER_MODEL, MIMO_MODEL, MIMO_MODEL]);
+  assert.match(calls[2]!.body.messages[0].content, /Previous extraction failed local validation: profile.ramGb \(too_small\)/);
+  assert.equal(calls[1]!.body.messages[1].content, calls[2]!.body.messages[1].content);
+  assert.equal(receipts.length, 3);
+  assert.ok(Math.abs(budget.spent - 0.00164) < 1e-12);
+});
+
+test('invalid fields stay invalid after the single retry, with safe field diagnostics', async () => {
+  const invalid = { ...extraction(), profile: { ...extraction().profile, ramGb: 0, quantity: 0, storageGb: 100_000 },
+    confidence: 95, 'hidden-fixture-key': 'sensitive-provider-text' };
+  const { client, calls } = scriptedClient([reply(decisions()), reply(completion(invalid)), reply(completion(invalid))]);
+  await assert.rejects(client.assess(raw, new RefreshBudget(0.25)), error => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /profile.ramGb \(too_small\)/);
+    assert.match(error.message, /confidence \(too_big\)/);
+    assert.ok(!error.message.includes('hidden-fixture-key') && !error.message.includes('sensitive-provider-text'));
+    return true;
+  });
+  assert.equal(calls.length, 3);
+  const feedback: string = calls[2]!.body.messages[0].content;
+  assert.ok(!feedback.includes('hidden-fixture-key') && !feedback.includes('sensitive-provider-text'));
+});
+
+test('invalid hardware JSON gets one corrective retry without replaying its untrusted text', async () => {
+  const invalid = completion(); invalid.choices[0]!.message.content = 'hidden-fixture-key: not JSON';
+  const { client, calls } = scriptedClient([reply(decisions()), reply(invalid), reply(completion())]);
+  assert.equal((await client.assess(raw, new RefreshBudget(0.25))).method, 'ai');
+  assert.match(calls[2]!.body.messages[0].content, /invalid JSON syntax/);
+  assert.ok(!JSON.stringify(calls[2]!.body).includes('hidden-fixture-key'));
+});
+
+test('truncated extraction increases only its retry output ceiling and still refuses partial output', async () => {
+  const truncated = completion(); truncated.choices[0]!.finish_reason = 'length';
+  const recovered = scriptedClient([reply(decisions()), reply(truncated), reply(completion())]);
+  assert.equal((await recovered.client.assess(raw, new RefreshBudget(0.25))).method, 'ai');
+  assert.deepEqual(recovered.calls.slice(1).map(call => call.body.max_tokens), [4_096, 8_192]);
+  const failed = scriptedClient([reply(decisions()), reply(truncated), reply(truncated)]);
+  await assert.rejects(failed.client.assess(raw, new RefreshBudget(0.25)), /truncated at the output token limit/);
+  assert.equal(failed.calls.length, 3);
+});
+
+test('transport and invalid-output recovery share one extra attempt per stage', async () => {
+  const invalid = extraction(); invalid.profile.vramGb = 0;
+  const { client, calls } = scriptedClient([reply(decisions()), new TypeError('hidden-fixture-key'), reply(completion(invalid))]);
+  await assert.rejects(client.assess(raw, new RefreshBudget(0.25)), /profile.vramGb \(too_small\)/);
+  assert.equal(calls.length, 3);
+});
+
+test('classification can recover once before extraction without replaying the full assessment', async () => {
+  const { client, calls } = scriptedClient([new TypeError('hidden-fixture-key'), reply(decisions()), reply(completion())]);
+  const budget = new RefreshBudget(0.25);
+  assert.equal((await client.assess(raw, budget)).method, 'ai');
+  assert.deepEqual(calls.map(call => call.body.model), [DECIDER_MODEL, DECIDER_MODEL, MIMO_MODEL]);
+  assert.ok(budget.spent > 0.00084, 'unknown billing from the failed call remains charged');
+});
+
+test('transient HTTP failures retry within the allowance while long Retry-After waits are respected', async () => {
+  for (const status of [408, 429, 500, 502, 503, 504]) {
+    const { client, calls } = scriptedClient([reply({ error: 'hidden-fixture-key' }, status, { 'Retry-After': '0' }), reply(decisions()), reply(completion())]);
+    assert.equal((await client.assess(raw, new RefreshBudget(0.25))).method, 'ai', String(status));
+    assert.equal(calls.length, 3);
+  }
+  for (const header of ['600', new Date(Date.now() + 60_000).toUTCString()]) {
+    const { client, calls } = scriptedClient([reply({}, 429, { 'Retry-After': header })]);
+    await assert.rejects(client.assess(raw, new RefreshBudget(0.25)), /HTTP 429/);
+    assert.equal(calls.length, 1, 'do not retry before a long provider cooldown expires');
+  }
+});
+
+test('authentication and input rejections do not retry or disclose response bodies', async () => {
+  for (const status of [400, 401, 402, 403, 404, 413]) {
+    const { client, calls } = scriptedClient([reply({ error: 'hidden-fixture-key' }, status)]);
+    const budget = new RefreshBudget(0.25);
+    await assert.rejects(client.assess(raw, budget), error => error instanceof Error && error.message.includes(`HTTP ${status}`) && !error.message.includes('hidden-fixture-key'));
+    assert.equal(calls.length, 1);
+    assert.equal(budget.spent, 0);
+  }
+});
+
+test('an uncertain first call can exhaust the allowance before a retry is dispatched', async () => {
+  const { client, calls } = scriptedClient([new TypeError('connection failed')]);
+  const budget = new RefreshBudget(0.002);
+  await assert.rejects(client.assess(raw, budget), BudgetExceededError);
+  assert.equal(calls.length, 1);
+  assert.ok(budget.spent > 0 && budget.spent < budget.limit);
+});
+
+test('cancellation during backoff prevents the extra provider call', async () => {
+  const controller = new AbortController();
+  const { client, calls } = scriptedClient([() => {
+    setTimeout(() => controller.abort(), 20);
+    throw new TypeError('connection failed');
+  }]);
+  const budget = new RefreshBudget(0.25);
+  await assert.rejects(client.assess(raw, budget, controller.signal), /abort/i);
+  assert.equal(calls.length, 1);
+  assert.ok(budget.spent > 0);
+});
+
+test('a stalled response body obeys the request deadline, cancels its reader and retries only extraction', async t => {
+  const timeout = AbortSignal.timeout.bind(AbortSignal), deadlines: number[] = [];
+  t.mock.method(AbortSignal, 'timeout', (milliseconds: number) => { deadlines.push(milliseconds); return timeout(20); });
+  let cancelled = 0;
+  const { client, calls } = scriptedClient([reply(decisions()), new Response(new ReadableStream({ cancel() { cancelled++; } })), reply(completion())]);
+  const budget = new RefreshBudget(0.25);
+  assert.equal((await client.assess(raw, budget)).method, 'ai');
+  assert.deepEqual(deadlines, [45_000, 120_000, 120_000]);
+  assert.equal(cancelled, 1);
+  assert.equal(calls.length, 3);
+  assert.ok(budget.spent > 0.00084, 'a timed-out generation retains its reserved charge');
+});
+
+test('caller cancellation drains a stalled body without retrying', async () => {
+  const controller = new AbortController();
+  let started!: () => void, cancelled = 0;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const { client, calls } = scriptedClient([reply(decisions()), () => new Response(new ReadableStream({ pull() { started(); }, cancel() { cancelled++; } }))]);
+  const budget = new RefreshBudget(0.25);
+  const rejected = assert.rejects(client.assess(raw, budget, controller.signal), /cancelled/);
+  await ready; controller.abort(); await rejected;
+  assert.equal(cancelled, 1);
+  assert.equal(calls.length, 2);
+  assert.ok(budget.spent > 0.00004);
+});
+
+test('deadline and connection errors identify the route without leaking provider text', async () => {
+  for (const failure of [new DOMException('hidden-fixture-key', 'TimeoutError'), new TypeError('hidden-fixture-key', { cause: { code: 'ECONNRESET' } })]) {
+    const { client, calls } = scriptedClient([failure, failure]);
+    await assert.rejects(client.assess(raw, new RefreshBudget(0.25)), error => {
+      assert.ok(error instanceof Error);
+      assert.ok(error.message.includes(DECIDER_MODEL) && !error.message.includes('hidden-fixture-key'));
+      assert.match(error.message, failure.name === 'TimeoutError' ? /timed out after 45 seconds/ : /connection failed \(ECONNRESET\)/);
+      return true;
+    });
+    assert.equal(calls.length, 2);
+  }
+});
+
+test('provider probes report all retry spending for each model', async () => {
+  const invalid = extraction(); invalid.profile.ramGb = 0;
+  const { client } = scriptedClient([reply(decisions()), reply(completion(invalid)), reply(completion())]);
+  const results = await client.test(new RefreshBudget(0.25));
+  assert.equal(results[1]!.ok, true);
+  assert.ok(Math.abs(results[1]!.costUsd! - 0.0016) < 1e-12);
 });
