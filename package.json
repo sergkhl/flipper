@@ -13,6 +13,7 @@
     "build": "tsc --noEmit && vite build",
     "start": "tsx server/index.ts",
     "test": "tsx --test test/*.test.ts",
+    "test:release": "node --test deploy/release.test.mjs",
     "memory:sync": "tsx scripts/sync-memory-cache.ts",
     "check": "tsc --noEmit",
     "deploy": "node deploy/deploy.mjs"
