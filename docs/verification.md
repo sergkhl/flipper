@@ -64,6 +64,17 @@ checks at 1440×1080 and 390×844 exercised retry, launch, cancellation, persist
 worker edits, reload and anonymous access. Both had no page errors or horizontal
 overflow. No live marketplace or paid-provider requests were made.
 
+AI recovery validation on 24 October 2026: all 329 fixture tests, TypeScript
+checking and the production build passed in Node 26. The new cases cover the
+validator-derived prompt contract, strict zero/range rejection, corrected output,
+truncation headroom, one shared extra attempt per stage, transient HTTP failures,
+long provider cooldowns, fatal rejections, uncertain charges, allowance exhaustion,
+deadline/body cancellation, redacted diagnostics and cumulative probe costs.
+A separate bounded live probe passed both fixed provider routes using synthetic
+hardware text. That probe establishes the observed request contract, not
+marketplace-wide semantic quality or a completed future scan. Billing receipts
+remain in private operational records. Historical run warnings are preserved.
+
 Market-opening checks cover read deadlines, stalled response bodies, caller
 cancellation and catalog updates. In a browser, check a stalled bootstrap,
 listings stalled after a slow bootstrap, a failed Retry and successful recovery.
