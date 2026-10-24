@@ -16,8 +16,8 @@ function sourceLines(raw: RawListing): { quote: string; text: string }[] {
   return listingText(raw).split('\n').map((quote) => ({ quote: quote.trim(), text: normalize(quote) })).filter((line) => line.quote);
 }
 
-function computerDetails(raw: RawListing, kind: Assessment['kind']): ComputerDetails {
-  const lines = sourceLines(raw), evidence: Evidence[] = [];
+function computerDetails(lines: ReturnType<typeof sourceLines>, kind: Assessment['kind']): ComputerDetails {
+  const evidence: Evidence[] = [];
   const details: ComputerDetails = {
     formFactor: null, cpuCount: null, motherboard: null, psu: null, case: null, cooling: null,
     ramEcc: null, ramReplaceable: null, storageReplaceable: null, missing: [], evidence,
@@ -79,14 +79,14 @@ function withoutDiscreteGpu(profile: HardwareProfile): HardwareProfile {
     gpuClass: profile.gpuClass === 'integrated' ? 'integrated' : null, vramGb: null, gpuMemoryType: null };
 }
 
-function verifiedPriceOptions(raw: RawListing, profile: HardwareProfile): PricedConfiguration[] {
+function verifiedPriceOptions(lines: ReturnType<typeof sourceLines>, profile: HardwareProfile): PricedConfiguration[] {
   const hasGpu = profile.gpu !== null && profile.gpuClass !== 'integrated';
-  const lines = sourceLines(raw);
   const options: PricedConfiguration[] = [];
   for (const { text, quote } of lines) {
+    if (!/\bgia\b|\bprice\b|\b(?:without|including|with)\b/.test(text)) continue;
     const prices = amounts(text);
     // Multiple amounts on one line need a richer association than this bounded rule.
-    if (prices.length !== 1 || !/\bgia\b|\bprice\b|\b(?:without|including|with)\b/.test(text)) continue;
+    if (prices.length !== 1) continue;
     if (noDiscreteGpu.test(text)) options.push({ label: 'PC without discrete GPU', price: prices[0]!, profile: withoutDiscreteGpu(profile), evidence: quote });
     else if (hasGpu && withDiscreteGpu.test(text)) options.push({ label: `PC including ${profile.gpu}`, price: prices[0]!, profile: { ...profile, gpuInclusion: 'included' }, evidence: quote });
   }
@@ -142,7 +142,8 @@ export function enrichComputerAssessment(raw: RawListing, input: Assessment, cac
       || (input.eligibility === 'review' && assessment.risks.length))) assessment.eligibility = 'review';
   }
   if (input.eligibility === 'excluded') { assessment.eligibility = 'excluded'; assessment.risks = unique([...assessment.risks, ...input.risks]); }
-  assessment.computer = computerDetails(raw, input.kind);
+  const lines = sourceLines(raw);
+  assessment.computer = computerDetails(lines, input.kind);
   const ramLabels = ['RAM generation', 'RAM speed', 'RAM stick layout', 'RAM form factor'];
   assessment.computer.missing = unique([...assessment.computer.missing,
     ...(!assessment.profile.ramType ? [ramLabels[0]!] : []),
@@ -162,10 +163,9 @@ export function enrichComputerAssessment(raw: RawListing, input: Assessment, cac
     assessment.unknowns = assessment.unknowns.filter((note) => !optionalBaseUnknowns.includes(note));
     if (assessment.eligibility === 'review' && !assessment.unknowns.length && !assessment.conflicts.length && !assessment.risks.length) assessment.eligibility = 'eligible';
   }
-  const lines = sourceLines(raw);
   const previousIncluded = input.priceOptions?.find((option) => option.profile.gpuInclusion === 'included')?.profile;
   const profile = assessment.profile.gpuInclusion === 'absent' && previousIncluded ? { ...previousIncluded } : assessment.profile;
-  const options = verifiedPriceOptions(raw, profile);
+  const options = verifiedPriceOptions(lines, profile);
   assessment.priceOptions = options;
   const explicitAbsence = lines.find(({ text }) => noDiscreteGpu.test(text));
   const gpuCount = gpuModels(listingText(raw)).length;

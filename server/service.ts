@@ -153,10 +153,12 @@ export class FlipperService {
       reason: 'Hardware interpretation changed; refresh this evidence before using its reference price' } : {}) };
   }
   private view(listing: StoredListing, readOnly = false): ListingView {
-    listing = this.prepared(listing);
-    const state = readOnly ? { ...EMPTY_STATE } : listing.state;
     // Personal overrides must not affect anonymous valuations, admission, or ordering.
     const settings = readOnly ? { ...DEFAULT_SETTINGS, ...this.publicSettings() } : this.store.getSettings();
+    return this.preparedView(this.prepared(listing), readOnly, settings);
+  }
+  private preparedView(listing: StoredListing, readOnly: boolean, settings: AppSettings): ListingView {
+    const state = readOnly ? { ...EMPTY_STATE } : listing.state;
     const valuation = valueListing(listing.raw, listing.assessment, listing.reference, settings, state, listing.reason);
     if (!readOnly) return { ...listing.raw, assessment: listing.assessment, state, valuation };
     return { ...listing.raw,
@@ -188,9 +190,10 @@ export class FlipperService {
       includeUnknownMemory: params.has('includeUnknownMemory') ? params.get('includeUnknownMemory') === 'true' : settings.includeUnknownMemory };
     const retained = this.store.localListings(category, readOnly || view === 'saved' ? undefined : query);
     const pool = readOnly && query ? retained.filter((row) => normalize(`${row.raw.title} ${row.raw.description}`).includes(query)) : retained;
+    const displaySettings = readOnly ? { ...DEFAULT_SETTINGS, ...this.publicSettings() } : settings;
     const admittedUnknownMemory = new Set<string>();
     let items = pool.map((row) => {
-      const prepared = this.prepared(row), item = this.view(prepared, readOnly);
+      const prepared = this.prepared(row), item = this.preparedView(prepared, readOnly, displaySettings);
       if (memory.includeUnknownMemory && onlyUnknownMemoryNeedsReview({ ...item, attributes: prepared.raw.attributes }, prepared.reference)) admittedUnknownMemory.add(item.id);
       return item;
     });

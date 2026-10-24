@@ -85,6 +85,7 @@ type IndexEntry = { fetchedAt: string; results: IndexRow[] };
 type DetailEntry = { fetchedAt: string; record: TechMemoryRecord | null };
 type CacheFile = { version: 1; attribution: typeof TECHAPI_ATTRIBUTION; indexes: Partial<Record<PartKind, IndexEntry>>;
   details: Record<string, DetailEntry>; misses: Record<string, string> };
+const modelIndexes = { cpu: new WeakMap<IndexEntry, Map<string, IndexRow[]>>(), gpu: new WeakMap<IndexEntry, Map<string, IndexRow[]>>() };
 
 function parseIndex(value: unknown): IndexRow[] {
   if (!isObject(value) || !Array.isArray(value.results) || value.results.length > MAX_ROWS) throw new Error('Invalid TechAPI index');
@@ -101,8 +102,19 @@ function matchingRows(index: IndexEntry | undefined, part: MemoryPartRequest): I
   if (!index) return [];
   const key = part.kind === 'cpu' ? cpuKey(part.model) : gpuKey(part.model), gpuClass = requestedClass(part);
   if (!key || part.kind === 'gpu' && gpuClass === 'integrated') return [];
-  return index.results.filter((row) => part.kind === 'cpu' ? cpuKey(row.name) === key
-    : gpuKey(row.name) === key && (!gpuClass || gpuClassOf(row.name) === gpuClass));
+  let models = modelIndexes[part.kind].get(index);
+  if (!models) {
+    models = new Map();
+    for (const row of index.results) {
+      const model = part.kind === 'cpu' ? cpuKey(row.name) : gpuKey(row.name);
+      const rows = models.get(model) ?? [];
+      rows.push(row); models.set(model, rows);
+    }
+    // A refreshed catalog is a new index object, so it gets a new lookup automatically.
+    modelIndexes[part.kind].set(index, models);
+  }
+  const rows = models.get(key) ?? [];
+  return part.kind === 'gpu' && gpuClass ? rows.filter((row) => gpuClassOf(row.name) === gpuClass) : rows;
 }
 function samePart(kind: PartKind, name: string, row: IndexRow): boolean {
   return kind === 'cpu' ? cpuKey(name) === cpuKey(row.name) : gpuName(name) === gpuName(row.name);

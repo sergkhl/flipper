@@ -104,6 +104,23 @@ test('unknown detail fields cannot satisfy known requirements, and Windows model
   assert.equal(api.calls.includes(url(other.slug)), false);
 });
 
+test('refreshed laptop indexes expose new configurations without restarting the cache', async (t) => {
+  const dir = await directory(t), api = transport(); api.index([mac]); api.detail(mac);
+  const cache = new TechAPICache(dir, { fetch: api.fetcher }), query = { model: 'MacBook Pro 14', cpu: 'M2 Pro' };
+  await cache.warmLaptops([query]);
+  assert.equal(cache.getLaptops(query).length, 1);
+
+  const future = Date.now() + 31 * 24 * 60 * 60 * 1_000;
+  t.mock.method(Date, 'now', () => future);
+  const variant = { slug: 'apple-macbook-pro-14-m2-pro-2023-32gb', name: mac.name };
+  api.index([mac, variant]); api.detail(variant, { ram_gb: 32 });
+  await cache.warmLaptops([query]);
+  const calls = api.calls.length;
+  assert.deepEqual(cache.getLaptops(query).map((record) => record.ramGb), [16, 32]);
+  assert.equal(cache.getLaptops({ ...query, ramGb: 32 }).length, 1);
+  assert.equal(api.calls.length, calls, 'reads of new configurations remain offline');
+});
+
 test('stale last-good laptop data remains available through provider failures and temporary 404s', async (t) => {
   const dir = await directory(t), api = transport(); api.index([mac]); api.detail(mac);
   const first = new TechAPICache(dir, { fetch: api.fetcher }); await first.warmLaptops([{ model: 'MacBook Pro', cpu: 'M2 Pro' }]);

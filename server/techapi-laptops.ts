@@ -66,15 +66,28 @@ function request(value: LaptopSpecRequest): LaptopSpecRequest | null {
 }
 const requestKey = (value: LaptopSpecRequest) => JSON.stringify([modelKey(value.model), value.cpu ? cpuKey(value.cpu) : null,
   value.modelYear ?? null, value.screenInches ?? null, value.cpuCores ?? null, value.gpuCores ?? null, value.ramGb ?? null, value.storageGb ?? null]);
+type Candidate = { row: Row; chip: string | null; screen: number | null; released: number | null };
+const modelIndexes = new WeakMap<Index, Map<string, Candidate[]>>();
 function candidates(index: Index | null, query: LaptopSpecRequest): Row[] {
+  if (!index) return [];
+  let models = modelIndexes.get(index);
+  if (!models) {
+    models = new Map();
+    for (const row of index.results) {
+      const family = macFamily(row.name), key = family ? `mac:${family}` : `model:${modelKey(row.name)}`;
+      const rows = models.get(key) ?? [];
+      rows.push({ row, chip: family ? appleChip(row.name) : null, screen: family ? namedScreen(row.name) : null,
+        released: family ? namedYear(row.name) : null });
+      models.set(key, rows);
+    }
+    modelIndexes.set(index, models);
+  }
   const family = macFamily(query.model);
-  return (index?.results ?? []).filter((row) => {
-    if (!family) return !macFamily(row.name) && modelKey(row.name) === modelKey(query.model);
-    if (macFamily(row.name) !== family) return false;
-    const chip = appleChip(row.name), screen = namedScreen(row.name), released = namedYear(row.name);
-    return !(chip && query.cpu && cpuKey(query.cpu) !== chip || screen && query.screenInches && !screenMatches(screen, query.screenInches, true)
-      || released && query.modelYear && released !== query.modelYear);
-  });
+  const rows = models.get(family ? `mac:${family}` : `model:${modelKey(query.model)}`) ?? [];
+  const cpu = query.cpu ? cpuKey(query.cpu) : null;
+  return rows.filter(({ chip, screen, released }) => !family || !(chip && cpu && cpu !== chip
+    || screen && query.screenInches && !screenMatches(screen, query.screenInches, true)
+    || released && query.modelYear && released !== query.modelYear)).map(({ row }) => row);
 }
 function matches(record: TechLaptopRecord, query: LaptopSpecRequest): boolean {
   if (macFamily(record.name) !== macFamily(query.model) || !macFamily(query.model) && modelKey(record.name) !== modelKey(query.model)) return false;

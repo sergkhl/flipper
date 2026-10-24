@@ -2,8 +2,23 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assessWithRules } from '../server/hardware.ts';
 import { enrichComputerAssessment } from '../server/computer.ts';
-import { MEMORY_TYPE_CATALOG_VERSION } from '../server/memory-types.ts';
+import { MEMORY_TYPE_CATALOG_VERSION, sellerMemoryTypes } from '../server/memory-types.ts';
 import { assessment, raw } from './helpers.ts';
+
+test('seller memory facts follow observation and hardware-kind changes without sharing mutable results', () => {
+  const item = raw('updated-memory', 8_000_000, { category: 'laptop', title: 'Laptop', description: 'RAM DDR4' });
+  const initial = sellerMemoryTypes(item);
+  initial.ramType[0]!.value = 'DDR2'; initial.ramType.push({ value: 'DDR3', quote: 'not seller evidence' });
+  assert.deepEqual(sellerMemoryTypes(item).ramType.map((claim) => claim.value), ['DDR4']);
+  item.description = 'RAM DDR5';
+  assert.deepEqual(sellerMemoryTypes(item).ramType.map((claim) => claim.value), ['DDR5']);
+  item.description = ''; item.params = { RAM: 'DDR3' };
+  assert.deepEqual(sellerMemoryTypes(item).ramType.map((claim) => claim.value), ['DDR3']);
+  item.params = {}; item.title = 'DDR4';
+  assert.equal(sellerMemoryTypes(item, 'ram').ramType.length, 1);
+  assert.equal(sellerMemoryTypes(item, 'gpu').gpuMemoryType.length, 1);
+  assert.equal(sellerMemoryTypes(item, 'gpu').ramType.length, 0);
+});
 
 test('compact computer RAM and separate VRAM type lines keep their own capacities and generations', () => {
   const item = raw('compact', 10_000_000, { category: 'desktop',

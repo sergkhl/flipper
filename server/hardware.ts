@@ -147,7 +147,8 @@ export function assessWithRules(raw: RawListing): Assessment {
     || /\b(?:e?gpu box|vo egpu|dock egpu)\b/.test(title))) kind = 'other';
   const gpus = gpuModels(text);
   const cpus = cpuModels(text);
-  const statedRamCapacities = new Set(ramCapacities(n).map((claim) => claim.value));
+  const ramClaims = ramCapacities(n);
+  const statedRamCapacities = new Set(ramClaims.map((claim) => claim.value));
   for (const [key, value] of Object.entries(raw.params)) {
     if (/pc_ram|dung luong ram/.test(normalize(key))) {
       const match = value.match(/^(\d{1,3})\s*(?:gb|g)$/i);
@@ -190,7 +191,7 @@ export function assessWithRules(raw: RawListing): Assessment {
     profile.gpu = profile.gpuCores ? `${profile.cpu} ${profile.gpuCores}-CORE INTEGRATED` : `${profile.cpu} INTEGRATED`;
     profile.gpuClass = 'integrated';
   }
-  const ramClaims = ramCapacities(n), ram = ramClaims[0];
+  const ram = ramClaims[0];
   if (ram) { profile.ramGb = ram.value; evidence.push({ field: 'ramGb', quote: text.split('\n').find((line) => normalize(line).includes(ram.quote))?.slice(0,240) ?? ram.quote }); }
   const macCapacities = macBookCapacities(raw);
   if (!profile.ramGb && macCapacities.length) { profile.ramGb = macCapacities[0]!.ramGb; evidence.push({field:'ramGb',quote:macCapacities[0]!.quote}); }

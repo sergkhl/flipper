@@ -43,7 +43,7 @@ import type {
   RefreshJob,
   SavedSearch,
 } from "../shared/types";
-import { ApiError, message, post, request } from "./api";
+import { ApiError, message, post, READ_TIMEOUT_MS, request } from "./api";
 import {
   categoryLabels,
   compactMoney,
@@ -101,14 +101,19 @@ export default function App() {
   const selectedRef = useRef(selectedId);
   selectedRef.current = selectedId;
   const memoryDefaultsLoaded = useRef(false);
+  const loadDeadline = useRef<number | null>(performance.now() + READ_TIMEOUT_MS);
   const adminBootstrap = bootstrap?.access === "admin" ? bootstrap : null;
   const canManage = adminBootstrap !== null;
   const workspaceHome = /^\/admin(?:\/|$)/.test(window.location.pathname)
     ? "/admin/"
     : "/";
 
-  const loadBootstrap = useCallback(async () => {
-    const result = await request<BootstrapResponse>("/bootstrap");
+  const loadBootstrap = useCallback(async (signal?: AbortSignal) => {
+    const result = await request<BootstrapResponse>("/bootstrap", {
+      signal,
+      timeoutMs: loadDeadline.current === null ? undefined : loadDeadline.current - performance.now(),
+    });
+    signal?.throwIfAborted();
     if (!memoryDefaultsLoaded.current) {
       memoryDefaultsLoaded.current = true;
       setMinRamGb(result.settings.minRamGb);
@@ -127,17 +132,24 @@ export default function App() {
     return result;
   }, []);
   useEffect(() => {
-    void loadBootstrap()
-      .then(async (result) => {
+    const controller = new AbortController();
+    void loadBootstrap(controller.signal)
+      .then((result) => {
         if (result.access === "admin") {
-          const active = await request<{ job: RefreshJob | null }>("/jobs/active");
-          setJob(active.job);
+          void request<{ job: RefreshJob | null }>("/jobs/active", { signal: controller.signal })
+            .then((active) => setJob(active.job))
+            .catch((error) => {
+              if (!controller.signal.aborted) setError(message(error));
+            });
         }
       })
       .catch((error) => {
+        if (controller.signal.aborted) return;
+        loadDeadline.current = null;
         setError(message(error));
         setLoading(false);
       });
+    return () => controller.abort();
   }, [loadBootstrap]);
 
   useEffect(() => {
@@ -159,6 +171,7 @@ export default function App() {
     setLoading(true);
     void request<ListingsResponse>(`/listings?${params}`, {
       signal: controller.signal,
+      timeoutMs: loadDeadline.current === null ? undefined : loadDeadline.current - performance.now(),
     })
       .then((result) => {
         setResponse(result);
@@ -169,7 +182,10 @@ export default function App() {
         if (!controller.signal.aborted) setError(message(error));
       })
       .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted) {
+          loadDeadline.current = null;
+          setLoading(false);
+        }
       });
     return () => controller.abort();
   }, [
@@ -416,6 +432,19 @@ export default function App() {
       setToast({ text: message(error) });
     }
   };
+  const retryLoading = async () => {
+    loadDeadline.current = performance.now() + READ_TIMEOUT_MS;
+    setLoading(true);
+    setError(null);
+    try {
+      await loadBootstrap();
+      setReload((value) => value + 1);
+    } catch (error) {
+      loadDeadline.current = null;
+      setError(message(error));
+      setLoading(false);
+    }
+  };
   const running = canManage && isRunning(job);
   const ai = canManage ? response?.ai || adminBootstrap.ai : null;
   const threshold = bootstrap?.settings.discountPercent ?? 20;
@@ -656,12 +685,8 @@ export default function App() {
               </div>
               <button
                 className="button subtle"
-                onClick={() => {
-                  void loadBootstrap().catch((error) =>
-                    setError(message(error)),
-                  );
-                  setReload((value) => value + 1);
-                }}
+                disabled={loading}
+                onClick={() => void retryLoading()}
               >
                 Retry
               </button>
@@ -1005,6 +1030,12 @@ export default function App() {
               <div className="loading-state">
                 <LoaderCircle size={28} className="spin" />
                 <strong>{canManage ? "Opening your workspace…" : "Opening the market…"}</strong>
+              </div>
+            ) : !response && error ? (
+              <div className="empty-state">
+                <div className="empty-icon"><TriangleAlert size={40} strokeWidth={1.4} /></div>
+                <h3>Couldn’t load listings.</h3>
+                <p>Use Retry above to load the market again.</p>
               </div>
             ) : items.length ? (
               <div className="listing-grid">

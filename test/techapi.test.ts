@@ -89,6 +89,21 @@ test('generic GPU lookup includes memory, capacity, and die variants while prese
   assert.ok(records.every((record) => !('memory_gb' in record)));
 });
 
+test('a refreshed catalog immediately exposes newly published memory variants', async (t) => {
+  const dir = await directory(t), api = transport(); api.index('gpu', [gpu]); api.detail('gpu', gpu);
+  const cache = new TechAPICache(dir, { fetch: api.fetcher });
+  await cache.warm([{ kind: 'gpu', model: 'RTX3060Ti', gpuClass: 'desktop' }]);
+  assert.deepEqual(cache.get('gpu', 'RTX3060Ti', 'desktop').flatMap((record) => record.types), ['GDDR6']);
+
+  const future = Date.now() + 31 * 24 * 60 * 60 * 1_000;
+  t.mock.method(Date, 'now', () => future);
+  api.index('gpu', [gpu, gpuX]); api.detail('gpu', gpuX, { memory_type: 'GDDR6X' });
+  await cache.warm([{ kind: 'gpu', model: 'RTX3060Ti', gpuClass: 'desktop' }]);
+  const calls = api.calls.length;
+  assert.deepEqual(cache.get('gpu', 'RTX3060Ti', 'desktop').flatMap((record) => record.types), ['GDDR6', 'GDDR6X']);
+  assert.equal(api.calls.length, calls, 'reads of the refreshed index remain offline');
+});
+
 test('GPU mobile, desktop, and integrated contexts stay separate, including MX and Arc M names', async (t) => {
   const dir = await directory(t), api = transport();
   const mobile = { slug: 'geforce-rtx-3060-ti-mobile', name: 'GeForce RTX 3060 Ti Mobile' };

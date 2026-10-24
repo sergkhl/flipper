@@ -5,6 +5,11 @@ import type { MemoryTypeLookup } from './techapi.ts';
 export const MEMORY_TYPE_CATALOG_VERSION = '2026-10-14.1';
 type MemoryField = MemoryTypeSource['field'];
 type TypeClaim = { value: string; quote: string };
+type TypeClaims = Record<MemoryField, TypeClaim[]>;
+const sellerClaims = new WeakMap<RawListing, { text: string; kind: HardwareKind; claims: TypeClaims }>();
+const copyClaims = (claims: TypeClaims): TypeClaims => ({
+  ramType: claims.ramType.map((claim) => ({ ...claim })), gpuMemoryType: claims.gpuMemoryType.map((claim) => ({ ...claim })),
+});
 export const MEMORY_TYPE_CONFLICTS: Record<MemoryField, string> = {
   ramType: 'Title, description or parameters disagree about RAM generation',
   gpuMemoryType: 'Title, description or parameters disagree about GPU memory generation',
@@ -26,13 +31,17 @@ export function memoryComponentBefore(line: string, index: number): string | und
 }
 
 /** Keep memory tokens in their own component clause; an unlabelled board spec is not installed RAM evidence. */
-export function sellerMemoryTypes(raw: RawListing, kind: HardwareKind = raw.category): Record<MemoryField, TypeClaim[]> {
-  const claims: Record<MemoryField, TypeClaim[]> = { ramType: [], gpuMemoryType: [] };
-  const hasGraphics = kind === 'gpu' || /\b(?:rtx|gtx|gt|rx|mx)\s*-?\s*\d{3,4}|\b(?:vram|vga|gpu|quadro|arc)\b/.test(fold(textOf(raw)));
-  for (const quote of textOf(raw).split('\n')) {
+export function sellerMemoryTypes(raw: RawListing, kind: HardwareKind = raw.category): TypeClaims {
+  const text = textOf(raw), previous = sellerClaims.get(raw);
+  if (previous?.text === text && previous.kind === kind) return copyClaims(previous.claims);
+  const claims: TypeClaims = { ramType: [], gpuMemoryType: [] };
+  const hasGraphics = kind === 'gpu' || /\b(?:rtx|gtx|gt|rx|mx)\s*-?\s*\d{3,4}|\b(?:vram|vga|gpu|quadro|arc)\b/.test(fold(text));
+  for (const quote of text.split('\n')) {
     const line = fold(quote).replace(/_/g, ' ');
+    const tokens = [...line.matchAll(/\b(?:lp\s*ddr\s*[2-6][xlt]?|gddr\s*[3-7]x?|ddr\s*[2-6][xl]?|dr3)\b/g)];
+    if (!tokens.length) continue;
     const markers = componentMarkers(line);
-    for (const token of line.matchAll(/\b(?:lp\s*ddr\s*[2-6][xlt]?|gddr\s*[3-7]x?|ddr\s*[2-6][xl]?|dr3)\b/g)) {
+    for (const token of tokens) {
       const value = normalizeMemoryType(token[0]), index = token.index!;
       const clauseStart = Math.max(line.lastIndexOf(',', index - 1), line.lastIndexOf(';', index - 1)) + 1;
       const before = markers.filter((marker) => marker.index >= clauseStart && marker.end <= index).at(-1);
@@ -56,7 +65,9 @@ export function sellerMemoryTypes(raw: RawListing, kind: HardwareKind = raw.cate
       claims[field].push({ value, quote: evidenceQuote });
     }
   }
-  return claims;
+  // Parsing and enrichment share facts only while the complete seller observation is unchanged.
+  sellerClaims.set(raw, { text, kind, claims });
+  return copyClaims(claims);
 }
 
 interface CatalogRecord {
@@ -118,6 +129,7 @@ export function enrichMemoryTypes(raw: RawListing, input: Assessment, cache?: Me
   delete assessment.memoryTypeSources;
   delete assessment.memoryTypeInferences;
   const direct = sellerMemoryTypes(raw, input.kind), text = fold(textOf(raw)).replace(/_/g, ' ');
+  const targetGpu = gpuKey(input.profile.gpu);
   const sources: MemoryTypeSource[] = [];
   const inferences: MemoryTypeInference[] = [];
   for (const field of fields) {
@@ -133,7 +145,7 @@ export function enrichMemoryTypes(raw: RawListing, input: Assessment, cache?: Me
     const records = catalog.filter((record) => {
       if (record.field !== field) return false;
       if (field === 'ramType') return ['laptop', 'desktop'].includes(input.kind) && !!record.match?.test(text);
-      if (!record.gpu || gpuKey(record.gpu) !== gpuKey(input.profile.gpu)) return false;
+      if (!record.gpu || gpuKey(record.gpu) !== targetGpu) return false;
       return record.mobileModel ? input.profile.gpuClass === 'mobile' && record.mobileModel.test(text)
         : input.profile.gpuClass === 'desktop';
     });
