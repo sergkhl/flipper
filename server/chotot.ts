@@ -1,8 +1,11 @@
 import type { Condition, HardwareKind, RawListing } from '../shared/types.ts';
 import type { SourceCooldown } from '../shared/types.ts';
 import { activeCooldown, retryAfterMs, SourceCooldownError, type CooldownStore } from './source-cooldown.ts';
-import { SourceDeferredError, SOURCE_INTERVAL_MS, type SourceRequestContext, type SourceRequestStore } from './source-policy.ts';
+import { SourceDeferredError, SOURCE_INTERVAL_MS, SOURCE_WORKERS, type SourceRequestContext, type SourceRequestStore } from './source-policy.ts';
 import type { ProxyPool } from './proxies.ts';
+import { WorkPool } from './concurrency.ts';
+
+interface RequestWorker { id: string; uri: string | null; busy: boolean; nextStart: number; }
 
 type ObjectValue = Record<string, unknown>;
 type SearchInput = {
@@ -241,8 +244,12 @@ async function boundedText(response: Response): Promise<string> {
 export class ChototClient {
   private readonly fetcher: typeof fetch;
   private readonly pauseMs: number;
-  private nextRequestAt = 0;
-  private requestQueue: Promise<void> = Promise.resolve();
+  private workers: RequestWorker[] = [];
+  private starting: Promise<void> | null = null;
+  private waiting = new Set<() => void>();
+  private refilling = new WorkPool(1);
+  private readonly workerLimit: number;
+  private jobError: unknown = null;
   private cooldown: SourceCooldown | null = null;
   private readonly cooldownStore?: CooldownStore;
   private readonly now: () => Date;
@@ -250,22 +257,56 @@ export class ChototClient {
   private readonly proxies?: ProxyPool;
   private context: SourceRequestContext | null = null;
 
-  constructor({ fetch: fetcher = globalThis.fetch, pauseMs = SOURCE_INTERVAL_MS, cooldownStore, now = () => new Date(), requestStore, proxies }:
-    { fetch?: typeof fetch; pauseMs?: number; cooldownStore?: CooldownStore; now?: () => Date; requestStore?: SourceRequestStore; proxies?: ProxyPool } = {}) {
+  constructor({ fetch: fetcher = globalThis.fetch, pauseMs = SOURCE_INTERVAL_MS, cooldownStore, now = () => new Date(), requestStore, proxies, workers }:
+    { fetch?: typeof fetch; pauseMs?: number; cooldownStore?: CooldownStore; now?: () => Date; requestStore?: SourceRequestStore; proxies?: ProxyPool; workers?: number } = {}) {
     this.fetcher = fetcher;
     this.pauseMs = Math.max(0, Number.isFinite(pauseMs) ? pauseMs : SOURCE_INTERVAL_MS);
     this.cooldownStore = cooldownStore;
     this.now = now;
     this.requestStore = requestStore; this.proxies = proxies;
+    this.workerLimit = Math.max(1, Math.min(SOURCE_WORKERS, workers ?? (proxies ? SOURCE_WORKERS : 1)));
   }
-  beginJob(context: SourceRequestContext): void { this.context = context; }
-  endJob(): void { if (this.context) this.proxies?.endJob(this.context.id); this.context = null; }
-  proxyStatus() { return this.proxies?.status() ?? null; }
+  beginJob(context: SourceRequestContext): void {
+    this.context = context; this.jobError = null; this.workers = []; this.starting = null; this.proxies?.beginJob();
+  }
+  endJob(): void { this.context = null; this.jobError = null; this.workers = []; this.starting = null; }
+  proxyStatus() { return this.proxies ? { ...this.proxies.status(), workerLimit: this.workerLimit,
+    workers: this.workers.filter(worker => worker.uri).length, activeWorkers: this.workers.filter(worker => worker.busy).length,
+    intervalMs: this.pauseMs } : null; }
   async close(): Promise<void> { await this.proxies?.close(); }
 
   private assertAvailable(): void {
+    if (this.jobError) throw this.jobError;
     const cooldown = activeCooldown(this.cooldownStore?.sourceCooldown() ?? this.cooldown, this.now());
     if (cooldown) throw new SourceCooldownError(cooldown);
+  }
+  private block(error: unknown): void {
+    if (this.context && (error instanceof SourceCooldownError || error instanceof SourceDeferredError)
+      && (!(this.jobError instanceof SourceCooldownError) || error instanceof SourceCooldownError)) this.jobError = error;
+    for (const wake of [...this.waiting]) wake();
+  }
+  private async startWorkers(signal?: AbortSignal): Promise<void> {
+    if (!this.starting) this.starting = (async () => {
+      const routes = this.proxies ? await this.proxies.routes(this.workerLimit, [], signal) : [null];
+      this.workers = routes.map((uri, index) => ({ id: String(index), uri, busy: false, nextStart: 0 }));
+      if (!this.workers.length) this.proxies!.pause();
+    })().catch(error => { this.starting = null; this.block(error); throw error; });
+    await this.starting;
+  }
+  private async acquireWorker(signal?: AbortSignal): Promise<RequestWorker> {
+    this.assertAvailable(); await this.startWorkers(signal);
+    while (true) {
+      signal?.throwIfAborted(); this.assertAvailable();
+      const usable = this.workers.filter(worker => !this.proxies || worker.uri);
+      if (!usable.length && !this.workers.some(worker => worker.busy)) return this.proxies!.pause();
+      const worker = usable.filter(worker => !worker.busy).sort((a,b) => a.nextStart - b.nextStart)[0];
+      if (worker) { worker.busy = true; return worker; }
+      await new Promise<void>((resolve, reject) => {
+        const finish = () => { this.waiting.delete(finish); signal?.removeEventListener('abort', abort); resolve(); };
+        const abort = () => { this.waiting.delete(finish); signal?.removeEventListener('abort', abort); reject(signal!.reason); };
+        this.waiting.add(finish); signal?.addEventListener('abort', abort, { once: true });
+      });
+    }
   }
 
   async search({ kind: requestedKind, location, query = '', page = 1, signal }: SearchInput): Promise<{ items: RawListing[]; total: number | null }> {
@@ -325,27 +366,23 @@ export class ChototClient {
     return item;
   }
 
-  private async requestTurn(signal?: AbortSignal): Promise<() => void> {
-    const previous = this.requestQueue;
-    let release!: () => void;
-    this.requestQueue = new Promise<void>(resolve => { release = resolve; });
+  private async requestTurn(worker: RequestWorker, signal?: AbortSignal): Promise<void> {
     try {
-      await previous;
       signal?.throwIfAborted();
       this.assertAvailable();
       // Recheck against actual dispatch time after delayed or early timer wakeups.
-      while (this.nextRequestAt > performance.now()) await wait(this.nextRequestAt - performance.now(), signal);
+      while (worker.nextStart > performance.now()) await wait(worker.nextStart - performance.now(), signal);
       signal?.throwIfAborted();
       this.assertAvailable();
       if (this.requestStore && this.context) {
         let next: string | null;
-        while ((next = this.requestStore.reserveSourceRequest(this.context.category, this.context.automatic, this.now(), this.pauseMs))) {
+        while ((next = this.requestStore.reserveSourceRequest(this.context.category, this.context.automatic, this.now(), this.pauseMs,
+          this.proxies ? { worker: worker.id, proxy: worker.uri! } : undefined))) {
           await wait(Math.max(1, Date.parse(next) - this.now().getTime()), signal);
           signal?.throwIfAborted(); this.assertAvailable();
         }
       }
-      return release;
-    } catch (error) { release(); throw error; }
+    } catch (error) { this.block(error); throw error; }
   }
 
   private async html(url: string, signal?: AbortSignal): Promise<{ html: string; url: string }> {
@@ -353,17 +390,21 @@ export class ChototClient {
     for (let attempt = 0; attempt < 3; attempt++) {
       signal?.throwIfAborted();
       this.assertAvailable();
-      // Discover a route before reserving a destination request. No direct fallback.
-      const proxy = this.proxies ? await this.proxies.uriForJob(this.context?.id ?? 'standalone', signal) : null;
-      const release = await this.requestTurn(signal);
+      // A worker holds its distinct route until the complete response has settled.
+      let worker: RequestWorker;
+      try { worker = await this.acquireWorker(signal); }
+      catch (error) { this.block(error); throw error; }
+      const proxy = worker.uri;
       const controller = new AbortController();
       const requestSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-      const timer = setTimeout(() => controller.abort(new DOMException('Chợ Tốt request timed out.', 'TimeoutError')), TIMEOUT_MS);
+      let timer: ReturnType<typeof setTimeout> | undefined;
       let retryDelay = 0;
       try {
+        await this.requestTurn(worker, signal);
+        timer = setTimeout(() => controller.abort(new DOMException('Chợ Tốt request timed out.', 'TimeoutError')), TIMEOUT_MS);
         let pendingResponse: Promise<Response>;
         signal?.throwIfAborted();
-        this.nextRequestAt = performance.now() + this.pauseMs;
+        worker.nextStart = performance.now() + this.pauseMs;
         this.context?.onRequest();
         const init: RequestInit = {
           signal: requestSignal, redirect: 'manual',
@@ -371,6 +412,7 @@ export class ChototClient {
         };
         pendingResponse = proxy ? this.proxies!.fetch(proxy, url, init) : this.fetcher(url, init);
         const response = await pendingResponse;
+        if (proxy) this.proxies!.succeeded(proxy);
         if ([301, 302, 303, 307, 308].includes(response.status)) {
           await response.body?.cancel();
           const location = response.headers.get('location');
@@ -385,13 +427,13 @@ export class ChototClient {
         if (retryable) {
           await response.body?.cancel();
           const now = this.now(), parsed = retryAfterMs(response.headers, now);
-          const delay = parsed ?? (response.status === 429 ? 60_000 : null);
+          const delay = response.status === 429 ? Math.max(1, parsed ?? 60_000) : parsed;
           if (delay !== null && delay > 0) {
             const until = new Date(Math.min(8.64e15, now.getTime() + Math.ceil(delay))).toISOString();
             const cooldown = { until, observedAt: now.toISOString(), status: response.status };
             this.cooldown = this.cooldownStore?.recordSourceCooldown(cooldown)
               ?? (this.cooldown && Date.parse(this.cooldown.until) > Date.parse(until) ? this.cooldown : cooldown);
-            if (delay > 5_000 || attempt === 2) throw new SourceCooldownError(this.cooldown);
+            if (response.status === 429 || delay > 5_000 || attempt === 2) throw new SourceCooldownError(this.cooldown);
           }
           if (attempt === 2) throw new Error(`Chợ Tốt is temporarily unavailable (HTTP ${response.status}). Try refreshing later.`);
           retryDelay = delay ?? 500 * 2 ** attempt;
@@ -410,16 +452,24 @@ export class ChototClient {
         }
       } catch (error) {
         signal?.throwIfAborted();
-        if (error instanceof SourceCooldownError || error instanceof SourceDeferredError) throw error;
+        if (error instanceof SourceCooldownError || error instanceof SourceDeferredError) { this.block(error); throw error; }
         if (proxy && !(error instanceof Error && /^Chợ Tốt|^This Chợ Tốt/.test(error.message))) {
-          this.proxies!.failed(proxy);
-          if (attempt === 2) this.proxies!.pause();
-          continue;
+          this.proxies!.failed(proxy); worker.uri = null;
+          await this.refilling.run(async () => {
+            signal?.throwIfAborted(); this.assertAvailable();
+            const excluded = this.workers.flatMap(item => item.uri ? [item.uri] : []);
+            const routes = await this.proxies!.routes(1, excluded, signal);
+            worker.uri = routes[0] ?? null;
+          }, signal);
+          attempt--; continue;
         }
         if (controller.signal.aborted) throw new Error('Chợ Tốt request timed out after 15 seconds.');
         if (error instanceof Error && /^Chợ Tốt|^This Chợ Tốt/.test(error.message)) throw error;
         throw new Error('Could not read Chợ Tốt. Check the connection and try refreshing again.');
-      } finally { clearTimeout(timer); release(); }
+      } finally {
+        clearTimeout(timer); worker.busy = false;
+        for (const wake of [...this.waiting]) wake();
+      }
       await wait(retryDelay, signal);
     }
     throw new Error('Chợ Tốt could not be reached.');

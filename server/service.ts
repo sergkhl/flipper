@@ -14,8 +14,9 @@ import type { ScanRetry, SourceCooldown } from '../shared/types.ts';
 import { activeCooldown, SourceCooldownError } from './source-cooldown.ts';
 import { reconcileAssessment } from './assessment.ts';
 import { ProxyPool } from './proxies.ts';
-import { AUTOMATIC_PART_SEARCHES, LOCAL_DETAIL_LIMIT, NATIONAL_OFFER_LIMIT, SourceDeferredError } from './source-policy.ts';
+import { AUTOMATIC_PART_SEARCHES, LOCAL_DETAIL_LIMIT, NATIONAL_OFFER_LIMIT, SourceDeferredError, AI_CONCURRENCY, SOURCE_WORKERS } from './source-policy.ts';
 import type { RefreshProgress } from '../shared/types.ts';
+import { WorkPool, KeyedWork, concurrent } from './concurrency.ts';
 
 const POOL_AGE_MS = 6 * 60 * 60 * 1000;
 const AUTO_COHORTS = 12;
@@ -25,7 +26,7 @@ type Source = Pick<ChototClient, 'search' | 'detail'> & Partial<Pick<ChototClien
 type MemoryCatalog = MemoryTypeLookup & { warm?(parts: MemoryPartRequest[], signal?: AbortSignal): Promise<void>;
   warmLaptops?(parts: LaptopSpecRequest[], signal?: AbortSignal): Promise<void> };
 interface MemoryFilters { minRamGb: number; minVramGb: number; includeUnknownMemory: boolean; }
-interface JobContext { job: RefreshJob; abort: AbortController; budget: RefreshBudget; settings: AppSettings; ai: LiteLLMClient | null; aiStopped: boolean; aiFailures: number; memory: MemoryFilters; pools: Map<string, AssessedListing[]>; automatic: boolean; progress: RefreshProgress; listingId?: string; scheduledDay?: string; retryId?: string; }
+interface JobContext { job: RefreshJob; abort: AbortController; budget: RefreshBudget; settings: AppSettings; ai: LiteLLMClient | null; aiStopped: boolean; aiFailures: number; memory: MemoryFilters; pools: Map<string, AssessedListing[]>; automatic: boolean; progress: RefreshProgress; aiGate: WorkPool; poolLocks: KeyedWork; assessments: Map<string, Promise<Assessment>>; stopped?: unknown; listingId?: string; scheduledDay?: string; retryId?: string; }
 
 function applicableMemory(category: Category, profile: HardwareProfile, filters: MemoryFilters): Array<{ capacity: number | null; minimum: number }> {
   const fields = category === 'gpu' ? [] : [{ capacity: profile.ramGb, minimum: filters.minRamGb }];
@@ -123,7 +124,8 @@ export class FlipperService {
       status: !settings.aiEnabled ? 'disabled' : !configured ? 'not_configured' : this.aiError ? 'error' : this.budgetLimited ? 'budget_limited' : 'ready',
       lastError: this.aiError, totalCostUsd: this.store.totalCost() };
   }
-  private marketplaceStatus() { return { requests: this.store.sourceBudgetStatus(this.now()), proxies: this.source.proxyStatus?.() ?? null }; }
+  private marketplaceStatus() { return { requests: this.store.sourceBudgetStatus(this.now()), proxies: this.source.proxyStatus?.() ?? null,
+    ai: { limit: AI_CONCURRENCY, active: this.active?.aiGate.running ?? 0 } }; }
   bootstrap(): AdminBootstrapResponse { return { access: 'admin', settings: this.store.getSettings(), ai: this.aiStatus(), schedule: this.scheduleStatus(), searches: this.store.searches(), counts: this.store.counts(), marketplace: this.marketplaceStatus() }; }
   scheduleStatus(now = this.now()) { return { ...dailyScanStatus(this.store, this.activeJob(), this.deploymentStatus().busy, now), marketplace: this.marketplaceStatus() }; }
   configureDailyScans(enabled: boolean, now = this.now()) {
@@ -356,17 +358,42 @@ export class FlipperService {
         includeUnknownMemory: memory.includeUnknownMemory ?? settings.includeUnknownMemory }, pools: new Map(),
       ai: key ? new LiteLLMClient({ key, onReceipt: (receipt) => {
         this.store.addReceipt(receipt); job.aiCostUsd = context.budget.spent;
-        if (context.retryId) this.store.recordScanRetry(context.retryId, job, this.aiError);
+        if (context.retryId) this.store.recordScanRetry(context.retryId, job, this.aiError, context.progress);
         if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, job);
       } }) : null, aiStopped: false, aiFailures: 0, automatic,
+      aiGate: new WorkPool(AI_CONCURRENCY), poolLocks: new KeyedWork(), assessments: new Map(),
       progress: retry?.progress ? structuredClone(retry.progress) : { ids: [], nextPage: 1, collected: false, assessedIds: [], comparedIds: [], initialDetails: 0 } };
     this.source.beginJob?.({ id: job.id, category, automatic, onRequest: () => { job.requestCount++; } });
     this.clearAIStatus(); this.active = context; this.jobs.set(job.id, job);
     if (this.jobs.size > 50) this.jobs.delete(this.jobs.keys().next().value!);
     return context;
   }
-  private async assessed(raw: RawListing, context: JobContext): Promise<Assessment> {
-    context.abort.signal.throwIfAborted();
+  private checkWork(context: JobContext): void {
+    context.abort.signal.throwIfAborted(); if (context.stopped) throw context.stopped;
+  }
+  private stopWork(context: JobContext, error: unknown): void {
+    if (!context.stopped || error instanceof SourceCooldownError) context.stopped = error;
+  }
+  private async parallel<T, R>(context: JobContext, items: readonly T[], work: (item: T, index: number) => Promise<R>): Promise<R[]> {
+    return concurrent(items, SOURCE_WORKERS, async (item, index) => {
+      this.checkWork(context);
+      try { return await work(item, index); }
+      catch (error) { this.stopWork(context, error); throw error; }
+    }, { errorPriority: error => error instanceof SourceCooldownError ? 2 : error instanceof SourceDeferredError ? 1 : 0 });
+  }
+  private checkpoint(context: JobContext): void {
+    context.job.aiCostUsd = context.budget.spent;
+    if (context.retryId) this.store.recordScanRetry(context.retryId, context.job, this.aiError, context.progress);
+  }
+  private assessed(raw: RawListing, context: JobContext): Promise<Assessment> {
+    this.checkWork(context);
+    const hash = assessmentHash(raw), existing = context.assessments.get(hash);
+    if (existing) return existing;
+    const pending = context.aiGate.run(() => this.assessOne(raw, context), context.abort.signal);
+    context.assessments.set(hash, pending); return pending;
+  }
+  private async assessOne(raw: RawListing, context: JobContext): Promise<Assessment> {
+    this.checkWork(context);
     if (sourceUnavailable(raw)) return this.memoryAssessment(raw, assessWithRules(raw));
     const cached = this.store.cachedAssessment(raw); if (cached) return this.memoryAssessment(raw, cached);
     const rules = this.memoryAssessment(raw, assessWithRules(raw));
@@ -401,6 +428,7 @@ export class FlipperService {
     } finally { context.job.aiCostUsd = context.budget.spent; }
   }
   private async enriched(raw: RawListing, context: JobContext, force = false): Promise<RawListing> {
+    this.checkWork(context);
     const previous = this.store.getListing(raw.id)?.raw;
     if (!force && previous && Date.now() - Date.parse(String(previous.attributes._detailedAt ?? '')) < POOL_AGE_MS
       && previous.title === raw.title && previous.price === raw.price && previous.condition === raw.condition
@@ -415,7 +443,7 @@ export class FlipperService {
       detail.attributes._detailedAt = new Date().toISOString(); return detail;
     } catch (error) {
       if (context.abort.signal.aborted) throw error;
-      if (error instanceof SourceCooldownError || error instanceof SourceDeferredError) throw error;
+      if (error instanceof SourceCooldownError || error instanceof SourceDeferredError) { this.stopWork(context, error); throw error; }
       // A vanished listing is retained in history and cannot be presented as a fresh eligible candidate.
       if (/404|410/.test(error instanceof Error ? error.message : '')) return { ...raw, condition: 'unknown', attributes: { ...raw.attributes, _sourceUnavailable: true } };
       return { ...raw, attributes: { ...raw.attributes, _detailError: error instanceof Error ? error.message : 'Detail request failed' } };
@@ -440,13 +468,14 @@ export class FlipperService {
     try {
       let page = progress.nextPage;
       while (!progress.collected && gathered.size < job.target) {
-        context.abort.signal.throwIfAborted(); this.countRequest(context);
+        this.checkWork(context); this.countRequest(context);
         const result = await this.source.search({ kind: job.category, location: 'danang', query: job.query, page, signal: context.abort.signal });
         job.totalAvailable = result.total; let added = 0;
         for (const raw of result.items) if (!gathered.has(raw.id) && gathered.size < job.target) { gathered.set(raw.id, raw); added++; }
         job.scanned = gathered.size; job.message = `Collected ${job.scanned} of up to ${job.target} local listings`;
         // Normalization can discard ads from a 20-ad source page; its usable length is not the source-page length.
         progress.ids = [...gathered.keys()]; progress.raws = [...gathered.values()]; progress.nextPage = page + 1;
+        this.checkpoint(context);
         if (!added || (result.total !== null ? page * 20 >= result.total : result.items.length < 20)) { progress.collected = true; break; }
         page++;
       }
@@ -457,16 +486,17 @@ export class FlipperService {
       const ordered = [...gathered.values()].map((raw) => ({ raw,
         priority: memoryPriority(job.category, this.memoryAssessment(raw, this.store.cachedAssessment(raw) ?? assessWithRules(raw)).profile, context.memory) }))
         .sort((a,b) => a.priority-b.priority || a.raw.price-b.raw.price).map(({ raw }) => raw);
-      for (let raw of ordered) {
-        if (progress.assessedIds.includes(raw.id)) continue;
+      await this.parallel(context, ordered.filter(raw => !progress.assessedIds.includes(raw.id)), async raw => {
         const rules = assessWithRules(raw);
         if (!sourceUnavailable(raw) && rules.eligibility !== 'excluded' && progress.initialDetails < LOCAL_DETAIL_LIMIT) {
-          raw = await this.enriched(raw, context); progress.initialDetails++;
+          progress.initialDetails++;
+          raw = await this.enriched(raw, context);
         }
+        gathered.set(raw.id, raw); progress.raws = [...gathered.values()];
         const assessment = await this.assessed(raw, context);
         this.store.putListing(raw, assessment, true); job.assessed++;
-        gathered.set(raw.id, raw); progress.raws = [...gathered.values()]; progress.assessedIds.push(raw.id);
-      }
+        progress.assessedIds.push(raw.id); this.checkpoint(context);
+      });
       await this.warmMemory([...gathered.keys()].map(id => this.store.getListing(id)!.raw), context.abort.signal);
       job.status = 'comparing';
       const groups = new Map<string, StoredListing[]>();
@@ -481,6 +511,7 @@ export class FlipperService {
         else groups.set(key, [...(groups.get(key) ?? []), listing]);
       }
       let count = completedConfigurations.size;
+      const selected: Array<[string, StoredListing[]]> = [];
       for (const [key, members] of groups) {
         if (count >= AUTO_COHORTS && !completedConfigurations.has(key)) {
           for (const listing of members) if (!listing.reference) this.store.setReference(listing.raw.id, null,
@@ -488,10 +519,17 @@ export class FlipperService {
           continue;
         }
         if (!completedConfigurations.has(key)) count++;
-        job.message = `Comparing hardware configuration ${count} of ${Math.min(groups.size + completedConfigurations.size, AUTO_COHORTS)} nationwide`;
+        selected.push([key, members]);
+      }
+      job.configurationsTotal = count; job.configurationsCompleted = completedConfigurations.size;
+      job.message = `Comparing hardware configurations: ${job.configurationsCompleted} of ${count} complete`;
+      await this.parallel(context, selected, async ([key, members]) => {
         await this.benchmark(members, context);
         progress.comparedIds.push(...members.map(member => member.raw.id));
-      }
+        if (!completedConfigurations.has(key)) { completedConfigurations.add(key); job.configurationsCompleted!++; }
+        job.message = `Comparing hardware configurations: ${job.configurationsCompleted} of ${count} complete`;
+        this.checkpoint(context);
+      });
       job.status = 'complete'; job.message = `Collected ${job.scanned} local listings; compared ${job.benchmarked} listings across ${count} configurations. Analyze any remaining listing individually.`;
       // Publish membership only after the full refresh succeeds. Failed or
       // cancelled comparison work leaves the last successful collection active.
@@ -510,6 +548,7 @@ export class FlipperService {
       context.job.status = 'assessing'; const assessment = await this.assessed(raw, context);
       const updated = this.store.putListing(raw, assessment, listing.local); context.job.assessed = 1;
       context.progress.raws = [raw]; context.progress.assessedIds = [raw.id];
+      this.checkpoint(context);
       if (assessment.eligibility === 'eligible') {
         context.job.status = 'comparing'; context.job.message = 'Retrieving focused nationwide price evidence';
         await this.benchmark([updated], context);
@@ -547,7 +586,7 @@ export class FlipperService {
     context.job.completedAt = this.now().toISOString(); context.job.aiCostUsd = context.budget.spent;
     const aiIssue = this.budgetLimited ? 'AI refresh budget exhausted; conservative parsing continued'
       : this.aiError ? `${context.aiStopped ? 'AI paused after repeated failures' : 'Some AI assessments failed'}: ${this.aiError}` : null;
-    if (context.retryId) this.store.recordScanRetry(context.retryId, context.job, aiIssue);
+    if (context.retryId) this.store.recordScanRetry(context.retryId, context.job, aiIssue, context.progress);
     if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, context.job, aiIssue);
     if (this.active === context) this.active = null;
     this.source.endJob?.();
@@ -571,6 +610,10 @@ export class FlipperService {
     reserveBaseSeller = false): Promise<AssessedListing[]> {
     const limit = Math.min(context.settings.benchmarkLimit, NATIONAL_OFFER_LIMIT);
     const key = `incremental-v3:${kind}:${normalize(query)}:${limit}`;
+    return context.poolLocks.run(key, () => this.collectPoolLocked(kind, query, target, context, reserveBaseSeller, key, limit), context.abort.signal);
+  }
+  private async collectPoolLocked(kind: HardwareKind, query: string, target: StoredListing, context: JobContext,
+    reserveBaseSeller: boolean, key: string, limit: number): Promise<AssessedListing[]> {
     const required = Math.max(5, context.settings.minComparables) + (reserveBaseSeller ? 1 : 0);
     const enough = (pool: AssessedListing[]) => kind === 'desktop' || kind === 'laptop'
       ? (buildReference(target.raw, target.assessment, pool, context.settings).reference?.sampleCount ?? 0) >= required
@@ -582,14 +625,19 @@ export class FlipperService {
     const assessed = new Map<string, { hash: string; assessment: Assessment }>();
     let pool: AssessedListing[] = [];
     while (true) {
-      context.abort.signal.throwIfAborted();
+      this.checkWork(context);
       pool = [];
-      for (const raw of progress.raws) {
-        const hash = assessmentHash(raw), existing = assessed.get(raw.id);
-        const assessment = existing?.hash === hash ? existing.assessment : await this.assessed(raw, context);
-        assessed.set(raw.id, { hash, assessment });
-        if (!this.store.getListing(raw.id)?.local) this.store.putListing(raw, assessment, false);
-        pool.push({ raw, assessment });
+      // Assess small batches, retaining unneeded raw offers for another target.
+      for (let offset = 0; offset < progress.raws.length; offset += AI_CONCURRENCY) {
+        const batch = await this.parallel(context, progress.raws.slice(offset, offset + AI_CONCURRENCY), async raw => {
+          const hash = assessmentHash(raw), existing = assessed.get(raw.id);
+          const assessment = existing?.hash === hash ? existing.assessment : await this.assessed(raw, context);
+          assessed.set(raw.id, { hash, assessment });
+          if (!this.store.getListing(raw.id)?.local) this.store.putListing(raw, assessment, false);
+          return { raw, assessment };
+        });
+        pool.push(...batch);
+        if (enough(pool)) break;
       }
       if (enough(pool)) break;
       const canCollect = !progress.exhausted && progress.raws.length < limit;
@@ -605,10 +653,16 @@ export class FlipperService {
           && (!computer || !canCollect || rank(a.profile.ramGb) < 2);
       }).sort((a, b) => computer ? rank(a.assessment.profile.ramGb) - rank(b.assessment.profile.ramGb) : 0);
       if (candidates.length && progress.detailedIds.length < 20) {
-        const next = candidates[0]!;
-        progress.raws[next.index] = await this.enriched(next.raw, context);
-        progress.detailedIds.push(next.raw.id);
-        this.store.savePoolProgress(key, progress); continue;
+        const supported = kind === 'desktop' || kind === 'laptop'
+          ? buildReference(target.raw, target.assessment, pool, context.settings).reference?.sampleCount ?? 0
+          : filterComparableOffers(target.raw, target.assessment.profile, kind, pool).accepted.length;
+        const size = Math.min(SOURCE_WORKERS, 20 - progress.detailedIds.length, Math.max(1, required - supported));
+        await this.parallel(context, candidates.slice(0, size), async next => {
+          const updated = await this.enriched(next.raw, context);
+          progress.raws[next.index] = updated; progress.detailedIds.push(next.raw.id);
+          this.store.savePoolProgress(key, progress);
+        });
+        continue;
       }
       if (!canCollect) break;
       this.countRequest(context);
@@ -628,15 +682,19 @@ export class FlipperService {
   }
   private async benchmark(members: StoredListing[], context: JobContext): Promise<void> {
     const verified: StoredListing[] = [];
-    for (let member of members) {
+    await this.parallel(context, members, async member => {
       member = this.prepared(member);
       if (!member.raw.description.trim()) {
         const raw = await this.enriched(member.raw, context);
+        const position = context.progress.raws?.findIndex(item => item.id === raw.id) ?? -1;
+        if (position >= 0) context.progress.raws![position] = raw;
         const assessment = await this.assessed(raw, context);
         member = this.store.putListing(raw, assessment, member.local);
       }
       if (member.assessment.eligibility === 'eligible' && !sourceUnavailable(member.raw) && member.raw.description.trim()) verified.push(member);
-    }
+    });
+    const order = new Map(members.map((member, index) => [member.raw.id, index]));
+    verified.sort((a,b) => order.get(a.raw.id)! - order.get(b.raw.id)!);
     if (!verified.length) return;
     const target = verified[0]!, kind = target.assessment.kind;
     const query = this.searchQuery(kind, target);
@@ -658,23 +716,24 @@ export class FlipperService {
         }
       }
       // Collect the most reusable required parts first; unsupported adjustments remain unpriced.
-      for (const request of [...requests.values()].sort((a,b) => b.uses-a.uses)
-        .slice(0, context.automatic ? AUTOMATIC_PART_SEARCHES : COMPONENT_SEARCHES_PER_COHORT)) {
+      await this.parallel(context, [...requests.values()].sort((a,b) => b.uses-a.uses)
+        .slice(0, context.automatic ? AUTOMATIC_PART_SEARCHES : COMPONENT_SEARCHES_PER_COHORT), async request => {
         const searchTarget = { ...target, assessment: { ...target.assessment, profile: request.profile } };
         const pool = await this.collectPool(request.kind, request.query, searchTarget, context, true);
         components[request.kind] = [...(components[request.kind] ?? []), ...pool];
-      }
+      });
     }
     if (!context.automatic && kind === 'desktop' && !buildReference(target.raw, target.assessment, peers, context.settings, components).reference) {
       const p = target.assessment.profile;
-      for (const component of ['gpu','ram','cpu','ssd'] as const) {
-        if (component === 'gpu' && (!p.gpu || !p.vramGb || p.gpuClass !== 'desktop')) continue;
-        if (component === 'ram' && (!p.perUnitGb || !p.quantity || !p.ramType || !p.ramFormFactor || !p.ramSpeedMhz)) continue;
-        if (component === 'cpu' && !p.cpu) continue;
-        if (component === 'ssd' && (!p.storageGb || !p.storageType || p.storageType === 'SSD')) continue;
+      await this.parallel(context, (['gpu','ram','cpu','ssd'] as const).filter(component => {
+        if (component === 'gpu') return p.gpu && p.vramGb && p.gpuClass === 'desktop';
+        if (component === 'ram') return p.perUnitGb && p.quantity && p.ramType && p.ramFormFactor && p.ramSpeedMhz;
+        if (component === 'cpu') return p.cpu;
+        return p.storageGb && p.storageType && p.storageType !== 'SSD';
+      }), async component => {
         const pool = await this.collectPool(component, this.searchQuery(component, target), target, context);
         components[component] = [...(components[component] ?? []), ...pool];
-      }
+      });
     }
     for (const member of verified) {
       context.abort.signal.throwIfAborted();

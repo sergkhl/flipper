@@ -2,10 +2,12 @@ import type { Category, SourceBudgetStatus } from '../shared/types.ts';
 export type { SourceBudgetStatus } from '../shared/types.ts';
 
 export const SOURCE_WINDOW_MS = 24 * 60 * 60 * 1000;
-export const SOURCE_REQUEST_LIMIT = 500;
+export const SOURCE_REQUEST_LIMIT = 700;
 export const SOURCE_CATEGORY_LIMIT = 150;
 export const SOURCE_AUTOMATIC_LIMIT = 450;
 export const SOURCE_INTERVAL_MS = 3_000;
+export const SOURCE_WORKERS = 4;
+export const AI_CONCURRENCY = 4;
 export const LOCAL_DETAIL_LIMIT = 10;
 export const NATIONAL_OFFER_LIMIT = 60;
 export const AUTOMATIC_PART_SEARCHES = 2;
@@ -25,7 +27,8 @@ export class SourceDeferredError extends Error {
   }
 }
 export interface SourceRequestStore {
-  reserveSourceRequest(category: Category, automatic: boolean, now: Date, intervalMs?: number): string | null;
+  reserveSourceRequest(category: Category, automatic: boolean, now: Date, intervalMs?: number,
+    pacing?: { worker: string; proxy: string }): string | null;
   sourceBudgetStatus(now?: Date): SourceBudgetStatus;
   runtimeValue<T>(key: string): T | null;
   setRuntimeValue(key: string, value: unknown): void;

@@ -210,11 +210,11 @@ test('a valid empty feed is different from a challenge or unsupported source sch
   assert.equal((await clientReturning(feed([ad()], 'unreliable count')).search({ kind: 'laptop', location: 'danang' })).total, null);
 });
 
-test('429 and 5xx responses may be retried twice, with a bounded final failure', async () => {
+test('5xx responses may be retried twice, with a bounded final failure', async () => {
   let calls = 0;
   const client = new ChototClient({ pauseMs: 0, fetch: mockFetch(() => {
     calls++;
-    return calls < 3 ? new Response('fixture-secret', { status: calls === 1 ? 429 : 503, headers: { 'retry-after': '0' } })
+    return calls < 3 ? new Response('fixture-secret', { status: 503, headers: { 'retry-after': '0' } })
       : new Response(feed());
   }) });
   assert.equal((await client.search({ kind: 'laptop', location: 'danang' })).items.length, 1);

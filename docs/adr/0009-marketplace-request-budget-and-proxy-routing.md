@@ -1,5 +1,7 @@
 # Bound marketplace traffic and resume through public HTTPS proxies
 
+ADR 0010 supersedes the concurrency, proxy assignment and total allowance below.
+
 Accepted 24 October 2026 after the request-reduction interview. This extends
 ADR 0007's durable recovery queue and narrows the collection bounds in ADR 0006.
 

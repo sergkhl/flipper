@@ -27,7 +27,7 @@ capacity. Browser checks use isolated synthetic listings for current, indicative
 historical and component-value views and their evidence drawers on desktop and
 mobile. No live provider or marketplace calls are needed for those UI checks.
 
-Request-control tests cover the rolling 500-attempt ceiling, 150 automatic
+Request-control tests cover the rolling 700-attempt ceiling, 150 automatic
 attempts per category, manual reserve, exact expiration, persistent pacing and
 shared SQLite reservations. Proxy tests mock both lists, unsafe endpoint input,
 sticky routing, bounded network failover, empty pools, catalog outages, default
@@ -38,6 +38,16 @@ analysis alongside queued category work, fresh timestamps, daily coalescing,
 latest settings and automatic versus on-demand component searches. Live public
 proxy connectivity is checked separately without marketplace calls during an
 active source cooldown.
+
+Parallel acceptance covers four overlapping response bodies with one per route,
+independent worker/proxy pacing, an atomic race for the last three request slots,
+global 429 dispatch blocking while started responses drain, three failed workers
+with one continuing route, a twelve-candidate HTTPS-probe ceiling, four shared
+AI slots without overspending, concurrent configuration queries, shared-query
+pagination without duplicate pages, and cancellation with a durable completed
+configuration checkpoint. Source/provider failures stop new work while preserving
+results from already-started calls. Tests use mocked routes and providers; real
+performance and proxy health must be reported separately.
 
 Market-opening checks cover read deadlines, stalled response bodies, caller
 cancellation and catalog updates. In a browser, check a stalled bootstrap,

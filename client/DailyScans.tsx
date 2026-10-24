@@ -84,6 +84,8 @@ export default function DailyScans({ initial }: { initial: DailyScanStatus }) {
       Marketplace requests: {schedule.marketplace.requests.used} / {schedule.marketplace.requests.limit} in the last 24 hours.
       Automatic work allows up to {schedule.marketplace.requests.automaticCategoryLimit} per category; at least {schedule.marketplace.requests.manualReserve} total are reserved for manual analysis.
       {schedule.marketplace.proxies && ` Proxy routing: ${schedule.marketplace.proxies.available} cached candidates available. Direct fallback is disabled.`}
+      {schedule.marketplace.proxies?.workerLimit !== undefined && ` ${schedule.marketplace.proxies.activeWorkers ?? 0} active proxy workers; ${schedule.marketplace.proxies.workers ?? 0} assigned of ${schedule.marketplace.proxies.workerLimit} maximum. ${schedule.marketplace.proxies.verified ?? 0} cached routes passed HTTPS checks.`}
+      {schedule.marketplace.ai && ` AI calls: ${schedule.marketplace.ai.active} active of ${schedule.marketplace.ai.limit} maximum.`}
     </p>}
     <p className="section-caption">Source cooldowns, request limits and unavailable proxies queue work for automatic recovery. Other failures and interrupted jobs are not automatically repeated.
       After downtime, today's missed daily work and previously queued work can resume.</p>

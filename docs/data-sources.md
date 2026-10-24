@@ -33,7 +33,12 @@ Marketplace HTTPS routing loads bounded runtime plaintext proxy lists from
 credential-free public HTTP, HTTPS and SOCKS5 candidates. Lists are untrusted
 discovery inputs; a listed proxy is not proof of availability. HTTPS certificate
 verification remains enabled, and only public marketplace requests use those
-routes. Source cooldowns and the shared 500-attempt rolling allowance apply
+routes. Source cooldowns and the shared 700-attempt rolling allowance apply
 across routes. Unavailable proxies queue work without a direct fallback.
 Catalog downloads, LiteLLM and administrator traffic do not use these proxies.
 Downloaded lists and cached endpoint/health state remain private runtime data.
+Up to four workers retain distinct proxy IPs, each with at least three seconds
+between request starts. Bounded HTTPS checks select routes; their success does
+not establish marketplace access. Fewer working routes reduce concurrency rather
+than stopping healthy workers. AI processing uses four separate direct gateway
+slots and the original shared job budget. See ADR 0010.

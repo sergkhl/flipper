@@ -136,7 +136,8 @@ test('local and national collection continue after a source page loses unusable 
     assert.deepEqual(visited.filter((call) => call.location === 'danang').map((call) => call.page), [1, 2, 3]);
     assert.deepEqual(visited.filter((call) => call.location === 'nationwide').map((call) => call.page), [1],
       'enough matching independent offers stop national pagination early');
-    assert.equal(service.detail('pagination-0')?.valuation.reference?.sampleCount, 18);
+    assert.equal(service.detail('pagination-0')?.valuation.reference?.sampleCount, 7,
+      'assessment stops after two bounded batches support the reference');
   } finally { store.close(); }
 });
 

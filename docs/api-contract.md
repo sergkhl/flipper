@@ -66,8 +66,8 @@ and listing responses never include schedule controls, schedule history or budge
 Request/proxy pauses return a `waiting` job with `resumeAt`. Repeating the same
 pending refresh or focused analysis returns that queued job. `GET /api/jobs/:id`
 resolves its durable recovery record across restarts. The private bootstrap and
-schedule include `marketplace` request usage (500 total, 150 per automatic
-category, 50 manual reserve) and proxy provider/candidate status. Retry status
+schedule include `marketplace` request usage (700 total, 150 per automatic
+category, 250 manual reserve) and proxy provider/candidate status. Retry status
 includes a `cooldown`, `request_budget` or `proxy` reason and optional focused
 `listingId`; raw progress checkpoints are excluded from HTTP responses. Waiting
 work resumes on the server using its recorded AI spending and can be cancelled
@@ -75,6 +75,13 @@ through `POST /api/scan-retries/:id/cancel`. This queue runs independently of th
 daily enable switch. New default bounds are 100 local listings, ten initial
 detail reads and at most 60 national offers per query. Settings reject a national
 limit above 60. The private schedule displays quota/proxy waiting states.
+Proxy status also reports `workerLimit`, assigned `workers`, `activeWorkers`,
+`verified` HTTPS routes and the per-worker `intervalMs`. `marketplace.ai` reports
+the separate AI pool's limit and active slots. Jobs report optional
+`configurationsCompleted` and `configurationsTotal`. Both pools have four slots;
+marketplace starts are spaced by three seconds per worker and proxy. A shared
+national query serializes pagination, and completed observations/AI spending
+survive partial failures after all started work drains. These fields remain private.
 
 The default discount threshold is 10%. `Valuation.opportunity` counts only
 complete or component-adjusted whole-item references. `componentOpportunity`

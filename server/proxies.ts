@@ -1,6 +1,8 @@
 import { ProxyAgent, fetch as proxyFetch } from 'undici';
 import { isIP } from 'node:net';
 import { SourceDeferredError, type SourceRequestStore } from './source-policy.ts';
+import { SOURCE_WORKERS } from './source-policy.ts';
+import { WorkPool } from './concurrency.ts';
 
 export const PROXY_SOURCES = [
   'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt',
@@ -11,7 +13,7 @@ const FAILURE_MS = 15 * 60_000;
 const RETRY_MS = 5 * 60_000;
 const MAX_BYTES = 4 * 1024 * 1024;
 const MAX_PROXIES = 200;
-interface ProxyState { at: string; uris: string[]; failed: Record<string, string>; cursor: number; retryAt?: string; refreshAfter?: string; }
+interface ProxyState { at: string; uris: string[]; failed: Record<string, string>; verified?: Record<string, string>; cursor: number; retryAt?: string; refreshAfter?: string; }
 type Send = (proxy: string, url: string, init: RequestInit) => Promise<Response>;
 
 /** Lists are untrusted input. Only credential-free public IPv4 proxy endpoints qualify. */
@@ -32,31 +34,41 @@ export function proxyUri(value: string): string | null {
 
 export class ProxyPool {
   private state: ProxyState;
-  private selected: { job: string; uri: string } | null = null;
+  private checking = new WorkPool(1);
+  private probesRemaining = 12;
   private agents = new Map<string, ProxyAgent>();
   private refreshing: Promise<void> | null = null;
   private now: () => Date;
   private download: typeof fetch;
   private send: Send;
+  private probe: (uri: string, signal?: AbortSignal) => Promise<boolean>;
   constructor(private store: Pick<SourceRequestStore, 'runtimeValue' | 'setRuntimeValue'>,
-    options: { now?: () => Date; download?: typeof fetch; send?: Send } = {}) {
+    options: { now?: () => Date; download?: typeof fetch; send?: Send; probe?: (uri: string, signal?: AbortSignal) => Promise<boolean> } = {}) {
     this.now = options.now ?? (() => new Date()); this.download = options.download ?? fetch;
     const saved = store.runtimeValue<ProxyState>('proxy_pool');
     this.state = saved && Array.isArray(saved.uris) ? { ...saved,
       uris: saved.uris.filter(uri => proxyUri(uri) === uri).slice(0, MAX_PROXIES), failed: saved.failed ?? {}, cursor: saved.cursor ?? 0 }
       : { at: '', uris: [], failed: {}, cursor: 0 };
+    this.state.verified ??= {};
     this.send = options.send ?? (async (uri, url, init) => {
       let agent = this.agents.get(uri);
       if (!agent) { agent = new ProxyAgent({ uri, connections: 1, connectTimeout: 5_000 }); this.agents.set(uri, agent); }
       return await proxyFetch(url, { method: 'GET', headers: init.headers as Record<string, string>, redirect: 'manual',
         signal: init.signal, dispatcher: agent }) as unknown as Response;
     });
+    this.probe = options.probe ?? (async (uri, signal) => {
+      const response = await this.send(uri, 'https://example.com/', { signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(8_000)]) : AbortSignal.timeout(8_000) });
+      const okay = response.ok; await response.body?.cancel(); return okay;
+    });
   }
+  beginJob(): void { this.probesRemaining = 12; }
   private save(): void { this.store.setRuntimeValue('proxy_pool', this.state); }
   status() {
     const now = this.now().getTime();
     return { enabled: true, sources: [...PROXY_SOURCES], cached: this.state.uris.length,
       available: this.state.uris.filter(uri => Date.parse(this.state.failed[uri] ?? '') <= now || !this.state.failed[uri]).length,
+      verified: this.state.uris.filter(uri => this.verified(uri, now)).length,
       fetchedAt: this.state.at || null,
       retryAt: this.state.retryAt && Date.parse(this.state.retryAt) > now ? this.state.retryAt : null };
   }
@@ -99,20 +111,51 @@ export class ProxyPool {
       }
       this.state.failed = Object.fromEntries(Object.entries(this.state.failed).filter(([uri, until]) =>
         this.state.uris.includes(uri) && Date.parse(until) > now.getTime()));
+      this.state.verified = Object.fromEntries(Object.entries(this.state.verified ?? {}).filter(([uri, at]) =>
+        this.state.uris.includes(uri) && now.getTime() - Date.parse(at) < CACHE_MS));
       this.save();
       if (!this.state.uris.length) throw new SourceDeferredError(this.state.retryAt!, 'proxy');
     })();
     try { await this.refreshing; } finally { this.refreshing = null; }
   }
-  async uriForJob(job: string, signal?: AbortSignal): Promise<string> {
-    const now = this.now().getTime();
-    if (this.state.retryAt && Date.parse(this.state.retryAt) > now) throw new SourceDeferredError(this.state.retryAt, 'proxy');
-    if (this.selected?.job === job) return this.selected.uri;
-    await this.refresh(signal);
-    const healthy = this.state.uris.filter(uri => !this.state.failed[uri] || Date.parse(this.state.failed[uri]!) <= now);
-    if (!healthy.length) return this.pause();
-    const uri = healthy[this.state.cursor++ % healthy.length]!;
-    this.selected = { job, uri }; this.save(); return uri;
+  private verified(uri: string, now: number): boolean {
+    return (!this.state.failed[uri] || Date.parse(this.state.failed[uri]!) <= now)
+      && now - Date.parse(this.state.verified?.[uri] ?? '') < CACHE_MS;
+  }
+  /** Probe at most twelve candidates per job; every worker gets a distinct proxy IP. */
+  async routes(limit = SOURCE_WORKERS, excluded: string[] = [], signal?: AbortSignal): Promise<string[]> {
+    return this.checking.run(async () => {
+      const now = this.now().getTime();
+      if (this.state.retryAt && Date.parse(this.state.retryAt) > now) throw new SourceDeferredError(this.state.retryAt, 'proxy');
+      await this.refresh(signal);
+      const hosts = new Set(excluded.map(uri => new URL(uri).hostname)), selected: string[] = [];
+      const add = (uri: string) => {
+        const host = new URL(uri).hostname;
+        if (!hosts.has(host) && selected.length < limit) { selected.push(uri); hosts.add(host); }
+      };
+      for (const uri of this.state.uris) if (this.verified(uri, now)) add(uri);
+      const checked = new Set<string>();
+      while (selected.length < limit && this.probesRemaining > 0) {
+        const candidates: string[] = [], batchHosts = new Set(hosts);
+        for (let i = 0; i < this.state.uris.length && candidates.length < Math.min(SOURCE_WORKERS, this.probesRemaining); i++) {
+          const uri = this.state.uris[(this.state.cursor + i) % this.state.uris.length]!;
+          const host = new URL(uri).hostname;
+          if (checked.has(uri) || batchHosts.has(host) || this.verified(uri, now)
+            || this.state.failed[uri] && Date.parse(this.state.failed[uri]!) > now) continue;
+          candidates.push(uri); batchHosts.add(host); checked.add(uri);
+        }
+        if (!candidates.length) break;
+        this.probesRemaining -= candidates.length; this.state.cursor += candidates.length;
+        const results = await Promise.allSettled(candidates.map(uri => this.probe(uri, signal)));
+        signal?.throwIfAborted();
+        for (let i = 0; i < results.length; i++) {
+          const result = results[i]!, uri = candidates[i]!;
+          if (result.status === 'fulfilled' && result.value) { this.succeeded(uri); add(uri); }
+          else this.failed(uri);
+        }
+      }
+      this.save(); return selected;
+    }, signal);
   }
   async fetch(uri: string, url: string, init: RequestInit): Promise<Response> {
     if (new URL(url).protocol !== 'https:') throw new Error('Proxy requests require HTTPS');
@@ -120,14 +163,14 @@ export class ProxyPool {
   }
   failed(uri: string): void {
     this.state.failed[uri] = new Date(this.now().getTime() + FAILURE_MS).toISOString();
-    if (this.selected?.uri === uri) this.selected = null;
+    delete this.state.verified![uri];
     const agent = this.agents.get(uri); this.agents.delete(uri); void agent?.destroy().catch(() => {});
     this.save();
   }
+  succeeded(uri: string): void { this.state.verified![uri] = this.now().toISOString(); delete this.state.failed[uri]; this.save(); }
   pause(): never {
     this.state.retryAt = new Date(this.now().getTime() + RETRY_MS).toISOString(); this.save();
     throw new SourceDeferredError(this.state.retryAt, 'proxy');
   }
-  endJob(job: string): void { if (this.selected?.job === job) this.selected = null; }
   async close(): Promise<void> { await Promise.allSettled([...this.agents.values()].map(agent => agent.destroy())); this.agents.clear(); }
 }

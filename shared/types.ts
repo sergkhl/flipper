@@ -273,6 +273,8 @@ export interface RefreshJob {
   /** Retry costs include the earlier attempts against the same allowance. */
   retryOf?: string;
   resumeAt?: string;
+  configurationsCompleted?: number;
+  configurationsTotal?: number;
 }
 export interface ListingsResponse {
   items: ListingView[];
@@ -368,5 +370,8 @@ export interface SourceBudgetStatus {
 }
 export interface MarketplaceStatus {
   requests: SourceBudgetStatus;
-  proxies: { enabled: boolean; sources: string[]; cached: number; available: number; fetchedAt: string | null; retryAt: string | null } | null;
+  proxies: { enabled: boolean; sources: string[]; cached: number; available: number; verified?: number;
+    workerLimit?: number; workers?: number; activeWorkers?: number; intervalMs?: number;
+    fetchedAt: string | null; retryAt: string | null } | null;
+  ai?: { limit: number; active: number };
 }

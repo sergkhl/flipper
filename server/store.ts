@@ -210,10 +210,12 @@ export class Store {
     for (const row of rows) { used += row.n; if (row.automatic) { automaticUsed += row.n; categoryUsed[row.category] += row.n; } }
     return { limit: SOURCE_REQUEST_LIMIT, used, automaticUsed, manualUsed: used - automaticUsed, categoryUsed,
       remaining: Math.max(0, SOURCE_REQUEST_LIMIT - used), automaticCategoryLimit: SOURCE_CATEGORY_LIMIT,
-      manualReserve: SOURCE_REQUEST_LIMIT - SOURCE_AUTOMATIC_LIMIT, nextRequestAt: this.runtimeValue<string>('next_source_request') };
+      manualReserve: SOURCE_REQUEST_LIMIT - SOURCE_AUTOMATIC_LIMIT,
+      nextRequestAt: this.runtimeValue<string>('next_source_request') };
   }
   /** Reserve before dispatch; an interrupted attempt remains charged. */
-  reserveSourceRequest(category: Category, automatic: boolean, now: Date, intervalMs = SOURCE_INTERVAL_MS): string | null {
+  reserveSourceRequest(category: Category, automatic: boolean, now: Date, intervalMs = SOURCE_INTERVAL_MS,
+    pacing?: { worker: string; proxy: string }): string | null {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const status = this.sourceBudgetStatus(now), cutoff = new Date(now.getTime() - SOURCE_WINDOW_MS).toISOString();
@@ -226,11 +228,18 @@ export class Store {
       if (automatic && status.automaticUsed >= SOURCE_AUTOMATIC_LIMIT) deadlines.push(oldest('AND automatic=1', []));
       if (automatic && status.categoryUsed[category] >= SOURCE_CATEGORY_LIMIT) deadlines.push(oldest('AND automatic=1 AND category=?', [category]));
       if (deadlines.length) throw new SourceDeferredError(new Date(Math.max(...deadlines)).toISOString(), 'request_budget');
-      if (status.nextRequestAt && Date.parse(status.nextRequestAt) > now.getTime()) {
-        this.db.exec('COMMIT'); return status.nextRequestAt;
+      const keys = pacing ? [`source_worker:${pacing.worker}`, `source_proxy:${createHash('sha256').update(new URL(pacing.proxy).hostname).digest('hex')}`] : ['next_source_request'];
+      const next = Math.max(0, ...keys.map(key => Date.parse(this.runtimeValue<string>(key) ?? '') || 0));
+      if (next > now.getTime()) {
+        this.db.exec('COMMIT'); return new Date(next).toISOString();
       }
       this.db.prepare('INSERT INTO source_requests(at,category,automatic) VALUES(?,?,?)').run(now.toISOString(), category, automatic ? 1 : 0);
-      this.setRuntimeValue('next_source_request', new Date(now.getTime() + intervalMs).toISOString());
+      const until = new Date(now.getTime() + intervalMs).toISOString();
+      for (const key of keys) this.setRuntimeValue(key, until);
+      if (pacing) {
+        const values = this.db.prepare("SELECT json FROM source_runtime WHERE key LIKE 'source_worker:%'").all() as { json: string }[];
+        this.setRuntimeValue('next_source_request', values.map(row => JSON.parse(row.json) as string).sort()[0] ?? until);
+      }
       this.db.prepare('DELETE FROM source_requests WHERE at<=?').run(new Date(now.getTime() - SOURCE_WINDOW_MS * 2).toISOString());
       this.db.exec('COMMIT'); return null;
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
@@ -335,14 +344,14 @@ export class Store {
       this.db.exec('COMMIT'); return { retry: claimed, settings: { ...settings, aiBudgetUsd: retry.budgetUsd } };
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
-  recordScanRetry(id: string, job: RefreshJob, aiIssue: string | null): void {
+  recordScanRetry(id: string, job: RefreshJob, aiIssue: string | null, progress?: RefreshProgress): void {
     const row = this.db.prepare('SELECT json FROM scan_retries WHERE id=?').get(id) as { json: string } | undefined;
     if (!row) throw new Error('Scan retry claim is missing');
     const retry: ScanRetry = JSON.parse(row.json);
     const terminal = ['complete', 'failed', 'cancelled'].includes(job.status);
     // A cooldown failure may already have returned this claim to the waiting queue.
     const status = retry.status === 'waiting' ? 'waiting' : terminal ? job.status as 'complete' | 'failed' | 'cancelled' : 'running';
-    this.saveScanRetry({ ...retry, job: { ...job }, status, aiIssue, spentUsd: Math.max(retry.spentUsd, job.aiCostUsd) });
+    this.saveScanRetry({ ...retry, job: { ...job }, status, aiIssue, ...(progress ? { progress } : {}), spentUsd: Math.max(retry.spentUsd, job.aiCostUsd) });
   }
   cancelScanRetry(id: string): ScanRetry {
     const row = this.db.prepare('SELECT json FROM scan_retries WHERE id=?').get(id) as { json: string } | undefined;

@@ -216,22 +216,27 @@ Pools are reused within the job. Remaining listings explicitly say they have not
 been benchmarked and can be analyzed individually. Additional description checks
 are made for candidates that are about to be priced.
 
-All marketplace routes share a persistent **500-request rolling 24-hour limit**,
+All marketplace routes share a persistent **700-request rolling 24-hour limit**,
 including retries, redirects and failures. Automatic work has a 150-request
-category ceiling and a 450-request total ceiling, reserving at least 50 for
-manual analysis. One request runs at a time, at least three seconds between
-starts. Exhausted allowance and unavailable proxies queue unfinished work for
+category ceiling and a 450-request total ceiling, reserving at least 250 for
+manual analysis. Up to four proxy workers run concurrently, at least three seconds
+between starts per worker. Four AI assessment workflows can run concurrently over
+the direct gateway, reserving against the same original job budget. National
+queries share pagination and stop small assessment batches once enough valid
+independent offers exist. Exhausted allowance and unavailable proxies queue unfinished work for
 automatic resumption with its progress and cumulative AI spending intact.
 Overlapping automatic work shares one queue entry and current settings.
 
 Public HTTPS marketplace requests use runtime candidates from
 [monosans](https://github.com/monosans/proxy-list) and
-[Proxifly](https://github.com/proxifly/free-proxy-list). A job retains its proxy;
-connection failures can switch it. A 429 retains the global source cooldown.
+[Proxifly](https://github.com/proxifly/free-proxy-list). Each worker retains a
+distinct proxy IP; connection failures can switch it. Bounded HTTPS checks select
+routes, and fewer workers continue if fewer routes work. A 429 retains the global source cooldown;
+already-started calls finish before checkpointing, while new calls wait.
 Unavailable proxies pause collection without direct fallback. LiteLLM and admin
 credentials stay outside these routes. Private Settings shows usage and queue
 status. [ADR 0009](docs/adr/0009-marketplace-request-budget-and-proxy-routing.md)
-records the full policy.
+and [ADR 0010](docs/adr/0010-parallel-marketplace-and-ai-workers.md) record the policy.
 
 Nationwide raw pools and partial progress can be reused for six hours; AI
 assessments are cached by listing content and asking price. Source failures retain

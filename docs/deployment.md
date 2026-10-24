@@ -73,14 +73,15 @@ Other failures, cancellations and interrupted claims do not repeat automatically
 The private schedule view shows queued recoveries and lets administrators cancel
 waiting entries independently of the daily enable switch.
 
-The shared marketplace allowance is 500 actual attempts per rolling 24 hours,
+The shared marketplace allowance is 700 actual attempts per rolling 24 hours,
 including every proxy route, retry and redirect. Automatic work has a 150-attempt
-category ceiling and leaves at least 50 for manual analysis. Request allowance,
+category ceiling and leaves at least 250 for manual analysis. Request allowance,
 the next permitted start, proxy candidates/health and incremental progress persist
 in SQLite. Request exhaustion and unavailable proxies use the same waiting queue
 and preserve its AI spending. Proxy catalogs are fetched lazily from the two
 fixed GitHub providers described in ADR 0009. Marketplace requests use HTTPS with
-certificate verification, one stable proxy per job and connection-only failover;
+certificate verification, four independently paced workers with stable distinct
+proxy IPs, and connection-only failover;
 there is no direct fallback. LiteLLM and administrator credentials stay outside
 these routes. Existing source cooldowns retain precedence over proxy switching.
 
@@ -103,6 +104,10 @@ snapshot as an automatic image-rollback step.
 Images predating cooldown recovery do not honor the persisted source pause or
 execute its queue. Keep that limitation explicit when choosing a rollback image.
 Images predating ADR 0009 also lack its rolling request limits and proxy routing.
+Images predating ADR 0010 retain the 500-attempt single-worker behavior and cannot
+report or run parallel proxy/AI pools. Worker/proxy pacing and spending survive
+image replacement. Check the private worker limits and actual new progress after
+release; health alone does not prove that collection has resumed.
 
 Before a deliberate database restore, pause scheduling, stop this service, make
 a fresh consistent backup, and reconcile any already-started scheduled attempts.

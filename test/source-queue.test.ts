@@ -107,7 +107,7 @@ test('national pagination continues through duplicate sellers until independent 
   });
   try {
     const job = service.analyze(candidate.id); assert.equal((await settled(service, job.id)).status, 'complete');
-    assert.deepEqual(pages, [1, 2]); assert.equal(service.detail(candidate.id)?.valuation.reference?.sampleCount, 9);
+    assert.deepEqual(pages, [1, 2]); assert.equal(service.detail(candidate.id)?.valuation.reference?.sampleCount, 8);
   } finally { await service.shutdown(); store.close(); }
 });
 

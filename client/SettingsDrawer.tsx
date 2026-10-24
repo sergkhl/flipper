@@ -383,9 +383,10 @@ export default function SettingsDrawer({
           <div className="settings-method-note">
             <ShieldCheck size={17} />
             <p>
-              Collection shares a limit of 500 marketplace requests per rolling
-              24 hours, with 150 per automatic category and at least 50 reserved
-              for manual work. Requests run one at a time, at least 3 seconds apart.
+              Collection shares a limit of 700 marketplace requests per rolling
+              24 hours, with 150 per automatic category. Up to four proxy workers
+              run concurrently, each starting requests at least 3 seconds apart.
+              AI assessments use up to four concurrent calls within the same budget.
               Automatic comparisons use at most two adjustment-part searches per
               configuration; partial component baselines are retrieved on demand.
             </p>

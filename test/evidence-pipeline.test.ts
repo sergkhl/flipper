@@ -16,7 +16,7 @@ async function completed(service: FlipperService, id: string) {
   return service.getJob(id)!;
 }
 
-for (const persistent of [false, true]) test(`AI ${persistent ? 'stops after three consecutive failures' : 'continues after isolated failures and resets the failure count'}`, async t => {
+for (const persistent of [false, true]) test(`AI ${persistent ? 'stops new work after three consecutive failures and drains its started batch' : 'continues after isolated failures and resets the failure count'}`, async t => {
   const store = new Store('', true);
   t.after(() => store.close());
   t.mock.method(store, 'getKey', () => 'fixture-key-no-network');
@@ -34,8 +34,8 @@ for (const persistent of [false, true]) test(`AI ${persistent ? 'stops after thr
   });
   const job = await completed(service, service.refresh('gpu', '', 20).id);
   assert.equal(job.status, 'complete'); assert.equal(job.assessed, 6);
-  assert.equal(attempted.filter(id => id.startsWith('local-')).length, persistent ? 3 : 6);
-  if (persistent) assert.equal(attempted.length, 3);
+  assert.equal(attempted.filter(id => id.startsWith('local-')).length, persistent ? 4 : 6);
+  if (persistent) assert.equal(attempted.length, 4, 'the fourth assessment was already in flight');
   else assert.equal(store.getListing('local-5')?.assessment.method, 'ai');
   assert.ok(job.aiCostUsd > 0 && job.aiCostUsd < store.getSettings().aiBudgetUsd);
   assert.equal(service.publicListings('gpu', new URLSearchParams()).stats.opportunities, 6);
