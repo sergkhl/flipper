@@ -22,8 +22,10 @@ rejected before parsing its body. Public bootstrap has `access: read-only`,
 only the five browsing/scoring settings, empty searches and null AI status.
 Public listing/detail responses neutralize personal state before valuation
 and filtering, redact private resale values and operational diagnostics, and
-return no job or AI information. Public searches filter all retained local
-listings without source/provider requests; the saved-listings view is private.
+return no job or AI information. Public searches filter the latest successful
+full category collection without source/provider requests. `view=history`
+searches retained local observations outside that collection; the saved-listings
+view is private. Bootstrap counts describe the current full collections.
 Coverage exposes no stored error details. The administrator and local bootstrap
 has `access: admin` and retains the full contract below. `/healthz` exposes only
 status and the running Git revision.
@@ -33,7 +35,7 @@ status and the running Git revision.
 Use the following paths locally; prepend `/admin` on the hosted app.
 
 - `GET /api/bootstrap` → BootstrapResponse.
-- `GET /api/listings?category=laptop|desktop|gpu&q=...&district=...&view=all|saved|review&opportunities=true|false&maxPrice=...&minRamGb=...&minVramGb=...&includeUnknownMemory=true|false&sort=value|newest|price` → ListingsResponse. Missing memory parameters use persistent settings defaults (initially RAM 16 GB, VRAM 8 GB, include unknown true). RAM applies only to computers. VRAM applies to standalone GPUs and included discrete graphics; integrated-only and explicitly GPU-free computers are exempt. Minimums are inclusive; zero disables a capacity threshold. The unknown-memory flag independently includes/excludes unknown applicable capacities, including with a zero threshold. Known below-minimum capacity always fails. The policy applies before all/saved/review selection and their statistics. Missing memory capacity alone may stay in the main feed when included, but other review reasons and price-evidence gates remain effective. Collection coverage and scanned count describe the unfiltered pool. Legacy `mode` does not change deal filtering, counts or ranking.
+- `GET /api/listings?category=laptop|desktop|gpu&q=...&district=...&view=all|saved|review|history|indicative|components&opportunities=true|false&maxPrice=...&minRamGb=...&minVramGb=...&includeUnknownMemory=true|false&sort=value|newest|price` → ListingsResponse. Missing memory parameters use persistent settings defaults (initially RAM 16 GB, VRAM 8 GB, include unknown true). RAM applies only to computers. VRAM applies to standalone GPUs and included discrete graphics; integrated-only and explicitly GPU-free computers are exempt. Minimums are inclusive; zero disables a capacity threshold. The unknown-memory flag independently includes/excludes unknown applicable capacities, including with a zero threshold. Known below-minimum capacity always fails. The policy applies before view selection and statistics. Missing memory capacity alone may stay in the main feed when included, but other review reasons and price-evidence gates remain effective. Collection coverage and scanned count describe the unfiltered pool. Legacy `mode` does not change deal filtering, counts or ranking.
 - `POST /api/refresh` with `{category, query?, limit?, minRamGb?, minVramGb?, includeUnknownMemory?}` → `{job: RefreshJob}`. Omitted memory parameters use settings defaults. Bounded detail/AI and comparison work prioritizes known matches, possible unknown matches, then known failures, with price ordering within groups. Source collection and nationwide reference pools retain their existing bounds and matching rules.
 - `GET /api/jobs/active` → `{job: RefreshJob|null}`.
 - `GET /api/deployment` → `{busy: boolean}`. Private activation readiness; active
@@ -59,7 +61,23 @@ Use the following paths locally; prepend `/admin` on the hosted app.
 
 Only one collection job runs at a time. Administrator actions can start manual
 refreshes; the enabled daily scanner uses the same pipeline. Public bootstrap
-and listing responses never include schedule controls, history or budgets.
+and listing responses never include schedule controls, schedule history or budgets.
+
+The default discount threshold is 10%. `Valuation.opportunity` counts only
+complete or component-adjusted whole-item references. `componentOpportunity`
+applies the same threshold to a partial component baseline and is excluded from
+market and resale opportunities. `view=components` selects these separate finds;
+`view=indicative` selects fresh references below the configured evidence minimum,
+with no discount score or badge. Statistics expose `componentOpportunities` and
+`indicative` separately. `evidenceIssue` identifies a missing, sparse, outdated,
+unavailable or ambiguous input for a specific UI explanation.
+
+Current membership is published after a refresh succeeds. A failed or cancelled
+refresh retains the previous collection. History includes retained local rows
+outside the current full category collection, including review/excluded rows;
+it preserves observation dates and the same public/private state boundary.
+Private saved items span current and historical rows, and focused private search
+collections remain separate from the public full-category membership.
 
 `Assessment.memoryTypeSources` records manufacturer-derived types separately
 from seller-text `evidence`, with `field`, `value`, `part`, `url` and

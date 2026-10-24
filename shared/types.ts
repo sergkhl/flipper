@@ -183,6 +183,7 @@ export interface Valuation {
   profit: number | null;
   roiPercent: number | null;
   opportunity: boolean;
+  componentOpportunity: boolean;
   resaleOpportunity: boolean;
   confidence: 'high' | 'medium' | 'low';
   reason: string;
@@ -190,6 +191,8 @@ export interface Valuation {
   expectedResale: number | null;
   maxBuyPrice: number | null;
   missingDetails?: string[];
+  evidenceIssue?: 'not_compared' | 'insufficient_offers' | 'configuration' | 'unavailable'
+    | 'outdated_policy' | 'missing_description' | 'stale_listing' | 'stale_reference' | 'unverified_price';
 }
 export interface ListingState {
   saved: boolean;
@@ -273,7 +276,7 @@ export interface RefreshJob {
 export interface ListingsResponse {
   items: ListingView[];
   total: number;
-  stats: { scanned: number; benchmarked: number; opportunities: number; saved: number; excluded: number; };
+  stats: { scanned: number; benchmarked: number; opportunities: number; componentOpportunities: number; indicative: number; saved: number; excluded: number; };
   districts: string[];
   coverage: Coverage | null;
   job: RefreshJob | null;

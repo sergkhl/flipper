@@ -47,6 +47,16 @@ resale opportunity only when its discount, net-profit and return thresholds pass
 A listing advertised in Da Nang, the initial buying location. District filters
 and pickup-first discovery are part of the accepted initial scope.
 
+**Current collection**:
+The membership of the latest successful full category refresh. Public searches
+filter this collection offline. A failed or cancelled refresh does not replace
+it. Private focused searches retain their own collection snapshots.
+
+**Historical observation**:
+A retained local listing outside the current collection, accessible separately
+with its asking-price observation date. Retention does not establish present
+availability. Saved items remain accessible independently of collection membership.
+
 **Saved search**:
 A search the user can return to and refresh manually. Saving a search does not
 schedule collection or notifications.
@@ -101,14 +111,26 @@ latter. Ambiguous variants and contradictory evidence remain unresolved.
 
 **Discount threshold**:
 The minimum reduction of the asking price relative to its reference price.
-It defaults to 20% and is configurable. For reference price R and asking price
-P, the discount is (R - P) / R; at the default threshold P must be at most 0.8R.
+It defaults to 10% and is configurable. For reference price R and asking price
+P, the discount is (R - P) / R; at the default threshold P must be at most 0.9R.
+
+**Below-market find**:
+A current, eligible listing whose asking price meets the discount threshold
+against a complete or component-adjusted whole-item reference. At least five
+independent sellers (or the higher configured minimum) and observations within
+24 hours remain required. Three or four offers provide separately browsable
+indicative comparisons without a scored discount or deal badge.
 
 **Partial component baseline**:
 A sum of independently supported prices for explicitly identified desktop
 components. Only the displayed parts are included; omitted parts have no inferred
 value. This is not a complete-system market price. Each included component needs
 at least five independent matching nationwide offers.
+
+**Below component value**:
+An asking price meeting the discount threshold against a partial component
+baseline. It has a separate label and filter and does not count as a
+below-market find or a resale opportunity.
 
 **Cost reserve**:
 Legacy stored allowance for transport, preparation and other purchase/resale costs.
@@ -123,3 +145,7 @@ Decider classifies a listing's type, eligibility and ambiguity. MiMo extracts
 stated hardware specifications and supporting seller-text quotes. Numeric price
 references and opportunity calculations use retrieved offers and deterministic
 arithmetic. A manual refresh has a configurable USD 0.25 initial AI budget.
+Quoted deterministic facts can fill AI omissions; conflicting claims remain
+in review. An unambiguous single-model GPU offer at a whole-item price may be
+interpreted as one card without an explicit quantity word. Bundle or multi-card
+language prevents this interpretation.

@@ -33,8 +33,8 @@ export function gpuModels(text: string): string[] {
 
 export function cpuModels(text: string): string[] {
   const n = normalize(text);
-  const intel = uniqueMatches(n, /\bi[3579]\s*[- ]\s*\d{4,5}[a-z]{0,3}\b/g)
-    .map((value) => value.replace(/(I[3579])\s*[- ]\s*/, '$1-'));
+  const intel = uniqueMatches(n, /\bi[3579]\s*[- ]?\s*\d{4,5}(?:g[147]|[a-z]{0,3})\b/g)
+    .map((value) => value.replace(/(I[3579])\s*[- ]?\s*/, '$1-'));
   const amd = uniqueMatches(n, /\bryzen\s*[3579]\s*[- ]?\s*\d{4}[a-z]{0,3}\b/g)
     .map((value) => value.replace(/^RYZEN\s*([3579])\s*[- ]?\s*(\d{4}[A-Z]{0,3})$/, 'RYZEN $1 $2'));
   const xeon = uniqueMatches(n, /\b(?:xeon\s*)?e[357]\s*[- ]?\s*\d{4}[a-z]{0,2}(?:\s*[- ]?\s*v[1-6])?\b/g)
@@ -268,8 +268,8 @@ export function assessWithRules(raw: RawListing): Assessment {
     if (layouts.length > 1) { profile.quantity = null; profile.perUnitGb = null; conflicts.push('Several RAM stick layouts are stated; the offered layout is not resolved'); }
     // No stick count or DIMM form factor is guessed from a total memory capacity.
   }
-  if (kind === 'gpu' && /\b(?:[2-9]\s*(?:card|cay|vga|gpu|cai|chiec)|cap card|bo card)\b/.test(n)) {
-    conflicts.push('Several graphics cards are advertised; the single-card cash price is not verified');
+  if (kind === 'gpu' && /\b(?:(?:0|[2-9]|[1-9]\d|two|three|four|five|hai|ba|bon)\s*(?:cards?|cay|vga|gpus?|cai|chiec)|cap card|bo card|pair of (?:cards|gpus)|bundle|combo|kit)\b/.test(n)) {
+    conflicts.push('The offered quantity or bundle does not establish a single-card cash price');
   }
   if (kind === 'ram') {
     const one = capacity(n, /\b(?:ram\s*|ddr[345]\s*)?(\d{1,3})\s*(gb|g)\b/);
@@ -314,7 +314,10 @@ export function assessWithRules(raw: RawListing): Assessment {
   if (itemClauses.some((clause) => /\b(?:new box|new seal|nguyen seal|moi 100%|chua su dung)\b/.test(clause))) { eligibility = 'excluded'; risks.push('Seller description states new/unopened rather than used'); }
   if (raw.attributes.is_price_not_valid === true || raw.attributes.price_available === false) conflicts.push('The source marks the advertised price as unavailable or invalid');
   const priceText = raw.description.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g,'d').toLowerCase();
-  const cashPrices = [...priceText.matchAll(/\bgia(?:\s*ban)?\s*[:=]?\s*(\d+(?:[.,]\d+)*)\s*(trieu|tr|m|k|nghin|ngan|vnd|dong|d|₫)?/g)]
+  // A gift's advertised value is not an asking price. Keep actual sale-price
+  // claims on the same line, and preserve conflicting whole-item prices.
+  const cashPriceText = priceText.replace(/\b(?:tri\s+gia|worth|valued at)\s*[:=]?\s*\d+(?:[.,]\d+)*\s*(?:trieu|tr|m|k|nghin|ngan|vnd|dong|d|₫)?/g, '');
+  const cashPrices = [...cashPriceText.matchAll(/\bgia(?:\s*ban)?\s*[:=]?\s*(\d+(?:[.,]\d+)*)\s*(trieu|tr|m|k|nghin|ngan|vnd|dong|d|₫)?/g)]
     .map((match) => {
       const unit = match[2] ?? 'vnd';
       const numberText = !/^(?:trieu|tr|m)$/.test(unit) && /^\d{1,3}(?:[.,]\d{3})+$/.test(match[1]!)

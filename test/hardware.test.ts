@@ -26,6 +26,15 @@ test('generic Core i5 family cannot become a specific CPU and missing specs rema
   assert.equal(laptop.profile.ramGb, 8); assert.equal(laptop.profile.storageGb, 128); assert.equal(laptop.eligibility, 'review');
 });
 
+test('explicit Intel mobile G-series variants and compact CPU spellings retain their exact identity', () => {
+  assert.deepEqual(cpuModels('Core i5-1135G7 / i7 1065G7 / i51035G1'), ['I5-1135G7', 'I7-1065G7', 'I5-1035G1']);
+  assert.deepEqual(cpuModels('Intel Core i5'), []);
+  const laptop = assessWithRules(raw('mobile-cpu', 8_000_000, { category: 'laptop',
+    title: 'MSI Modern 14 B11MOU i5-1135G7 RAM 16GB SSD 512GB' }));
+  assert.equal(laptop.profile.cpu, 'I5-1135G7');
+  assert.ok(laptop.evidence.some(e => e.field === 'cpu' && e.quote.includes('i5-1135G7')));
+});
+
 test('fresh SSD evidence cannot turn an intermittent defective drive or a mixed-component bundle into a standalone price', () => {
   const defective = assessWithRules(raw('135033621', 480_000, { category: 'ssd',
     title: 'Ổ cứng SSD NVMe 256GB lỗi cần đổi', description: 'Hiện tại đang nhận tốt. Đổi nvme 256 khác theo giá thoả thuận' }));

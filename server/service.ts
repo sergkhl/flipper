@@ -12,15 +12,17 @@ import { laptopSpecRequest } from './laptop-specs.ts';
 import { dailyScanStatus } from './scheduler.ts';
 import type { ScanRetry, SourceCooldown } from '../shared/types.ts';
 import { activeCooldown, SourceCooldownError } from './source-cooldown.ts';
+import { reconcileAssessment } from './assessment.ts';
 
 const POOL_AGE_MS = 6 * 60 * 60 * 1000;
 const AUTO_COHORTS = 12;
 const COMPONENT_SEARCHES_PER_COHORT = 12;
+const MAX_CONSECUTIVE_AI_FAILURES = 3;
 type Source = Pick<ChototClient, 'search' | 'detail'>;
 type MemoryCatalog = MemoryTypeLookup & { warm?(parts: MemoryPartRequest[], signal?: AbortSignal): Promise<void>;
   warmLaptops?(parts: LaptopSpecRequest[], signal?: AbortSignal): Promise<void> };
 interface MemoryFilters { minRamGb: number; minVramGb: number; includeUnknownMemory: boolean; }
-interface JobContext { job: RefreshJob; abort: AbortController; budget: RefreshBudget; settings: AppSettings; ai: LiteLLMClient | null; aiStopped: boolean; memory: MemoryFilters; pools: Map<string, AssessedListing[]>; scheduledDay?: string; retryId?: string; }
+interface JobContext { job: RefreshJob; abort: AbortController; budget: RefreshBudget; settings: AppSettings; ai: LiteLLMClient | null; aiStopped: boolean; aiFailures: number; memory: MemoryFilters; pools: Map<string, AssessedListing[]>; scheduledDay?: string; retryId?: string; }
 
 function applicableMemory(category: Category, profile: HardwareProfile, filters: MemoryFilters): Array<{ capacity: number | null; minimum: number }> {
   const fields = category === 'gpu' ? [] : [{ capacity: profile.ramGb, minimum: filters.minRamGb }];
@@ -87,7 +89,7 @@ export class FlipperService {
     private now: () => Date = () => new Date()) {}
 
   private memoryAssessment(raw: RawListing, assessment: Assessment): Assessment {
-    return enrichComputerAssessment(raw, assessment, this.memoryCatalog);
+    return enrichComputerAssessment(raw, reconcileAssessment(raw, assessment), this.memoryCatalog);
   }
   private async warmMemory(raws: RawListing[], signal: AbortSignal): Promise<void> {
     if (!this.memoryCatalog?.warm && !this.memoryCatalog?.warmLaptops) return;
@@ -188,8 +190,11 @@ export class FlipperService {
     const memory: MemoryFilters = { minRamGb: Number(params.get('minRamGb') ?? settings.minRamGb),
       minVramGb: Number(params.get('minVramGb') ?? settings.minVramGb),
       includeUnknownMemory: params.has('includeUnknownMemory') ? params.get('includeUnknownMemory') === 'true' : settings.includeUnknownMemory };
-    const retained = this.store.localListings(category, readOnly || view === 'saved' ? undefined : query);
-    const pool = readOnly && query ? retained.filter((row) => normalize(`${row.raw.title} ${row.raw.description}`).includes(query)) : retained;
+    const offlineSearch = readOnly || view === 'history' || view === 'saved';
+    const retained = view === 'saved' ? this.store.localListings(category)
+      : view === 'history' ? this.store.marketListings(category, true)
+      : readOnly ? this.store.marketListings(category) : this.store.localListings(category, query);
+    const pool = offlineSearch && query ? retained.filter((row) => normalize(`${row.raw.title} ${row.raw.description}`).includes(query)) : retained;
     const displaySettings = readOnly ? { ...DEFAULT_SETTINGS, ...this.publicSettings() } : settings;
     const admittedUnknownMemory = new Set<string>();
     let items = pool.map((row) => {
@@ -203,14 +208,17 @@ export class FlipperService {
     items = items.filter((item) => matchesMemory(category, item.assessment.profile, memory));
     const stats = { scanned: pool.length, benchmarked: items.filter((item) => item.valuation.reference !== null).length,
       opportunities: items.filter((item) => item.valuation.opportunity).length,
+      componentOpportunities: items.filter(item => item.valuation.componentOpportunity).length,
+      indicative: items.filter(item => item.valuation.status === 'indicative').length,
       saved: items.filter((item) => item.state.saved).length, excluded: items.filter(needsReview).length };
     if (view === 'saved') items = items.filter((item) => item.state.saved);
     else if (view === 'review') items = items.filter((item) => needsReview(item) || item.state.dismissed);
-    else items = items.filter((item) => !needsReview(item) && !item.state.dismissed);
+    else if (view !== 'history') items = items.filter((item) => !needsReview(item) && !item.state.dismissed);
+    if (view === 'indicative') items = items.filter(item => item.valuation.status === 'indicative');
+    if (view === 'components') items = items.filter(item => item.valuation.componentOpportunity);
     const district = params.get('district'); if (district) items = items.filter((item) => item.district === district);
     const maxPrice = Number(params.get('maxPrice')); if (maxPrice > 0) items = items.filter((item) => item.price <= maxPrice);
     if (params.get('opportunities') === 'true') items = items.filter((item) => item.valuation.opportunity);
-    if (view === 'saved' && query) items = items.filter((item) => normalize(`${item.title} ${item.description}`).includes(query));
     const sort = params.get('sort');
     items.sort(sort === 'price' ? (a,b) => a.price-b.price : sort === 'newest' ? (a,b) => b.observedAt.localeCompare(a.observedAt)
       : (a,b) => Number(b.valuation.opportunity) - Number(a.valuation.opportunity)
@@ -324,13 +332,14 @@ export class FlipperService {
         this.store.addReceipt(receipt); job.aiCostUsd = context.budget.spent;
         if (context.retryId) this.store.recordScanRetry(context.retryId, job, this.aiError);
         if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, job);
-      } }) : null, aiStopped: false };
+      } }) : null, aiStopped: false, aiFailures: 0 };
     this.clearAIStatus(); this.active = context; this.jobs.set(job.id, job);
     if (this.jobs.size > 50) this.jobs.delete(this.jobs.keys().next().value!);
     return context;
   }
   private async assessed(raw: RawListing, context: JobContext): Promise<Assessment> {
     context.abort.signal.throwIfAborted();
+    if (sourceUnavailable(raw)) return this.memoryAssessment(raw, assessWithRules(raw));
     const cached = this.store.cachedAssessment(raw); if (cached) return this.memoryAssessment(raw, cached);
     const rules = this.memoryAssessment(raw, assessWithRules(raw));
     if (!context.ai || context.aiStopped || rules.eligibility === 'excluded') return rules;
@@ -349,13 +358,18 @@ export class FlipperService {
       assessment.conflicts = [...new Set([...assessment.conflicts, ...rules.conflicts])];
       if (assessment.eligibility === 'eligible' && assessment.conflicts.length) assessment.eligibility = 'review';
       const resolved = this.memoryAssessment(raw, assessment);
+      context.aiFailures = 0;
       this.store.cacheAssessment(raw, resolved); return resolved;
     } catch (error) {
       if (context.abort.signal.aborted) throw error;
-      context.aiStopped = true;
-      if (error instanceof BudgetExceededError || context.budget.remaining === 0) this.budgetLimited = true;
-      else this.aiError = error instanceof Error ? error.message : 'AI provider request failed';
-      return { ...rules, status: `${rules.status}. ${this.budgetLimited ? 'AI refresh budget exhausted' : 'AI provider unavailable'}` };
+      if (error instanceof BudgetExceededError || context.budget.remaining === 0) {
+        this.budgetLimited = true; context.aiStopped = true;
+      } else {
+        this.aiError = error instanceof Error ? error.message : 'AI provider request failed';
+        context.aiStopped = ++context.aiFailures >= MAX_CONSECUTIVE_AI_FAILURES;
+      }
+      return { ...rules, status: `${rules.status}. ${this.budgetLimited ? 'AI refresh budget exhausted'
+        : context.aiStopped ? 'AI paused after repeated failures' : 'AI failed for this listing; continuing with local rules'}` };
     } finally { context.job.aiCostUsd = context.budget.spent; }
   }
   private async enriched(raw: RawListing, context: JobContext, force = false): Promise<RawListing> {
@@ -402,20 +416,17 @@ export class FlipperService {
       let detailCount = 0;
       for (let raw of ordered) {
         const rules = assessWithRules(raw);
-        if (rules.eligibility !== 'excluded' && detailCount < 30) { raw = await this.enriched(raw, context); detailCount++; }
+        if (!sourceUnavailable(raw) && rules.eligibility !== 'excluded' && detailCount < 30) { raw = await this.enriched(raw, context); detailCount++; }
         const assessment = await this.assessed(raw, context);
         this.store.putListing(raw, assessment, true); job.assessed++;
       }
       await this.warmMemory([...gathered.keys()].map(id => this.store.getListing(id)!.raw), context.abort.signal);
-      this.store.setCollection(job.category, job.query, [...gathered.keys()]);
-      this.store.saveCoverage({ category: job.category, query: job.query, scanned: job.scanned, totalAvailable: job.totalAvailable,
-        limit: job.target, completedAt: new Date().toISOString(), error: null, requestCount: job.requestCount });
       job.status = 'comparing';
       const groups = new Map<string, StoredListing[]>();
-      for (const listing of this.store.localListings(job.category, job.query).map((item) => this.prepared(item)).sort((a,b) =>
+      for (const listing of [...gathered.keys()].map(id => this.prepared(this.store.getListing(id)!)).sort((a,b) =>
         memoryPriority(job.category, a.assessment.profile, context.memory) - memoryPriority(job.category, b.assessment.profile, context.memory)
         || a.raw.price-b.raw.price)) {
-        if (listing.assessment.eligibility !== 'eligible') continue;
+        if (listing.assessment.eligibility !== 'eligible' || sourceUnavailable(listing.raw)) continue;
         const c = listing.assessment.computer;
         const key = `${profileKey(listing.assessment.profile, listing.assessment.kind)}:${JSON.stringify([c?.formFactor, c?.cpuCount, c?.ramEcc, c?.ramReplaceable, c?.storageReplaceable])}`;
         groups.set(key, [...(groups.get(key) ?? []), listing]);
@@ -431,8 +442,11 @@ export class FlipperService {
         await this.benchmark(members, context);
       }
       job.status = 'complete'; job.message = `Collected ${job.scanned} local listings; compared ${job.benchmarked} listings across ${count} configurations. Analyze any remaining listing individually.`;
-      const coverage = this.store.coverage(job.category, job.query);
-      if (coverage) this.store.saveCoverage({ ...coverage, requestCount: job.requestCount, completedAt: new Date().toISOString() });
+      // Publish membership only after the full refresh succeeds. Failed or
+      // cancelled comparison work leaves the last successful collection active.
+      this.store.setCollection(job.category, job.query, [...gathered.keys()]);
+      this.store.saveCoverage({ category: job.category, query: job.query, scanned: job.scanned, totalAvailable: job.totalAvailable,
+        limit: job.target, completedAt: new Date().toISOString(), error: null, requestCount: job.requestCount });
     } catch (error) { this.failed(context, error, true); }
     finally { this.finish(context); }
   }
@@ -469,10 +483,10 @@ export class FlipperService {
   }
   private finish(context: JobContext): void {
     context.job.completedAt = this.now().toISOString(); context.job.aiCostUsd = context.budget.spent;
-    if (context.retryId) this.store.recordScanRetry(context.retryId, context.job,
-      this.aiError ? `AI unavailable: ${this.aiError}` : this.budgetLimited ? 'AI refresh budget exhausted; conservative parsing continued' : null);
-    if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, context.job,
-      this.aiError ? `AI unavailable: ${this.aiError}` : this.budgetLimited ? 'AI refresh budget exhausted; conservative parsing continued' : null);
+    const aiIssue = this.budgetLimited ? 'AI refresh budget exhausted; conservative parsing continued'
+      : this.aiError ? `${context.aiStopped ? 'AI paused after repeated failures' : 'Some AI assessments failed'}: ${this.aiError}` : null;
+    if (context.retryId) this.store.recordScanRetry(context.retryId, context.job, aiIssue);
+    if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, context.job, aiIssue);
     if (this.active === context) this.active = null;
   }
   private searchQuery(kind: HardwareKind, listing: StoredListing): string {
@@ -518,7 +532,7 @@ export class FlipperService {
         const raw = raws[i]!, p = target.assessment.profile;
         const plausible = kind === 'gpu' ? !a.profile.gpu || a.profile.gpu === p.gpu
           : kind === 'cpu' || kind === 'desktop' ? !a.profile.cpu || a.profile.cpu === p.cpu : a.eligibility !== 'excluded';
-        if (raw.id !== target.raw.id && plausible && a.eligibility !== 'excluded' && details < 20
+        if (raw.id !== target.raw.id && !sourceUnavailable(raw) && plausible && a.eligibility !== 'excluded' && details < 20
           && (!raw.description.trim() || a.eligibility === 'review')) {
           raws[i] = await this.enriched(raw, context); details++;
         }
@@ -544,7 +558,7 @@ export class FlipperService {
         const assessment = await this.assessed(raw, context);
         member = this.store.putListing(raw, assessment, member.local);
       }
-      if (member.assessment.eligibility === 'eligible' && member.raw.description.trim()) verified.push(member);
+      if (member.assessment.eligibility === 'eligible' && !sourceUnavailable(member.raw) && member.raw.description.trim()) verified.push(member);
     }
     if (!verified.length) return;
     const target = verified[0]!, kind = target.assessment.kind;

@@ -480,38 +480,44 @@ export function valueListing(raw: RawListing, assessment: Assessment, reference:
   const costReserve = state.costReserve ?? settings.costReserves[category];
   const missing = [...new Set([...missingDetails(assessment), ...(reference?.missingDetails ?? [])])];
   const empty: Valuation = { status: 'insufficient_evidence', reference: null, discountPercent: null, profit: null, roiPercent: null,
-    opportunity: false, resaleOpportunity: false, confidence: 'low', reason, costReserve, expectedResale: null, maxBuyPrice: null,
+    opportunity: false, componentOpportunity: false, resaleOpportunity: false, confidence: 'low', reason, costReserve, expectedResale: null, maxBuyPrice: null,
+    evidenceIssue: /^Only \d+ independent/.test(reason) ? 'insufficient_offers'
+      : /Hardware interpretation changed/.test(reason) ? 'outdated_policy'
+      : /No reliable model/.test(reason) ? 'configuration' : 'not_compared',
     ...(missing.length ? { missingDetails: missing } : {}) };
-  if (sourceUnavailable(raw)) return { ...empty, status: 'needs_review', reason: 'The original listing is no longer available; its last observed price is retained in history' };
+  if (sourceUnavailable(raw)) return { ...empty, status: 'needs_review', evidenceIssue: 'unavailable', reason: 'The original listing is no longer available; its last observed price is retained in history' };
   if (assessment.eligibility === 'excluded') return { ...empty, status: 'excluded', reason: assessment.risks.join('; ') || 'Excluded from working used items' };
-  if (!raw.sellerId) return { ...empty, status:'needs_review', reason:'The candidate seller cannot be identified, so own-seller offers cannot be excluded from a reference' };
-  if (assessment.eligibility === 'review' || assessment.conflicts.length || !Number.isFinite(raw.price) || raw.price <= 0) return { ...empty, status: 'needs_review', reason: [...assessment.conflicts, ...assessment.unknowns, ...assessment.risks].join('; ') || 'Configuration needs review' };
-  if (assessment.kind === 'gpu' && (assessment.profile.quantity !== 1 || assessment.profile.priceBasis === 'bundle')) return { ...empty, status:'needs_review', reason:'The asking price for one graphics card must be verified before comparing prices' };
-  if (/^(?:GT 730|GT 1030|GTX 1650)$/.test(assessment.profile.gpu ?? '') && !assessment.profile.gpuMemoryType) return { ...empty, status:'needs_review', reason:'The GPU memory-generation variant must be verified before comparing prices' };
+  if (!raw.sellerId) return { ...empty, status:'needs_review', evidenceIssue: 'configuration', reason:'The candidate seller cannot be identified, so own-seller offers cannot be excluded from a reference' };
+  if (assessment.eligibility === 'review' || assessment.conflicts.length || !Number.isFinite(raw.price) || raw.price <= 0) return { ...empty, status: 'needs_review', evidenceIssue: 'configuration', reason: [...assessment.conflicts, ...assessment.unknowns, ...assessment.risks].join('; ') || 'Configuration needs review' };
+  if (assessment.kind === 'gpu' && (assessment.profile.quantity !== 1 || assessment.profile.priceBasis === 'bundle')) return { ...empty, status:'needs_review', evidenceIssue: 'unverified_price', reason:'The asking price for one graphics card must be verified before comparing prices' };
+  if (/^(?:GT 730|GT 1030|GTX 1650)$/.test(assessment.profile.gpu ?? '') && !assessment.profile.gpuMemoryType) return { ...empty, status:'needs_review', evidenceIssue: 'configuration', reason:'The GPU memory-generation variant must be verified before comparing prices' };
   if (assessment.kind === 'laptop' && (macFamily(assessment.profile) || appleSilicon(assessment.profile))) {
     const mismatch = laptopIdentityMismatch(assessment.profile, assessment.profile);
-    if (mismatch) return { ...empty, reason: mismatch };
+    if (mismatch) return { ...empty, evidenceIssue: 'configuration', reason: mismatch };
   }
   if (!reference) return empty;
-  if (reference.policyVersion !== REFERENCE_POLICY_VERSION) return { ...empty, reason:'Refresh this evidence to apply the current memory-type and configuration checks.' };
-  if (!raw.description.trim() || raw.attributes._detailError) return { ...empty, status: 'needs_review', reason: 'Retrieve the complete seller description before using a price score. Choose Analyze to check condition and cash-price details.' };
-  if (freshnessInvalid(raw.observedAt, Date.now())) return { ...empty, reason: 'The local asking price is older than 24 hours or has an invalid observation time. Refresh it before using this valuation.' };
+  if (reference.policyVersion !== REFERENCE_POLICY_VERSION) return { ...empty, evidenceIssue: 'outdated_policy', reason:'Refresh this evidence to apply the current memory-type and configuration checks.' };
+  if (!raw.description.trim() || raw.attributes._detailError) return { ...empty, status: 'needs_review', evidenceIssue: 'missing_description', reason: 'Retrieve the complete seller description before using a price score. Choose Analyze to check condition and cash-price details.' };
+  if (freshnessInvalid(raw.observedAt, Date.now())) return { ...empty, evidenceIssue: 'stale_listing', reason: 'The local asking price is older than 24 hours or has an invalid observation time. Refresh it before using this valuation.' };
   const allEvidence = [...reference.offers, ...reference.components.flatMap((component) => component.offers),
     ...(reference.adjustedOffers ?? []).flatMap((offer) => offer.adjustments.flatMap((term) => term.offers))];
   const expired = allEvidence.some((offer) => freshnessInvalid(offer.observedAt, Date.now()));
   const required = Math.max(5, settings.minComparables);
   if (expired || reference.sampleCount < INDICATIVE_MIN_COMPARABLES || reference.average <= 0) return { ...empty,
+    evidenceIssue: expired ? 'stale_reference' : 'insufficient_offers',
     reason: expired ? 'Nationwide price evidence is older than 24 hours. Refresh before using this valuation.' : `At least ${INDICATIVE_MIN_COMPARABLES} comparable offers are required for an indicative average` };
-  if (raw.price < reference.average * .1) return { ...empty, status:'needs_review', reason:'The advertised price is less than 10% of the supported reference. Verify that it is the full cash price for this item before treating it as a bargain.' };
-  if (reference.sampleCount < required) return { ...empty, status: 'indicative', reference,
+  if (raw.price < reference.average * .1) return { ...empty, status:'needs_review', evidenceIssue: 'unverified_price', reason:'The advertised price is less than 10% of the supported reference. Verify that it is the full cash price for this item before treating it as a bargain.' };
+  if (reference.sampleCount < required) return { ...empty, status: 'indicative', reference, evidenceIssue: undefined,
     reason: `Indicative average and observed range from ${reference.sampleCount} independent offers; at least ${required} are required for deal scoring.` };
   const expectedResale = state.expectedResale ?? Math.round(reference.average * settings.resaleFactor);
   const discountPercent = (reference.average - raw.price) / reference.average * 100;
   const profit = expectedResale - raw.price - costReserve;
   const roiPercent = profit / (raw.price + costReserve) * 100;
-  const opportunity = discountPercent + 1e-9 >= settings.discountPercent;
+  const meetsThreshold = discountPercent + 1e-9 >= settings.discountPercent;
+  const componentOpportunity = reference.kind === 'component_floor' && meetsThreshold;
+  const opportunity = reference.kind !== 'component_floor' && meetsThreshold;
   const resaleOpportunity = opportunity && profit >= settings.minProfit && roiPercent + 1e-9 >= settings.minRoiPercent;
-  return { status: 'valued', reference, discountPercent, profit, roiPercent, opportunity, resaleOpportunity,
+  return { status: 'valued', reference, discountPercent, profit, roiPercent, opportunity, componentOpportunity, resaleOpportunity,
     confidence: reference.kind === 'component_floor' || missing.length ? 'low'
       : reference.kind !== 'adjusted_configuration' && reference.sampleCount >= 10 && assessment.confidence >= 0.8 ? 'high' : 'medium',
     reason: reference.kind === 'component_floor' ? 'Discount against a partial component baseline; inspect omitted parts and condition'

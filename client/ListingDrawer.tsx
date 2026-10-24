@@ -24,6 +24,7 @@ import type {
 import Drawer from "./Drawer";
 import { message } from "./api";
 import { date, money, safeSourceUrl } from "./format";
+import { evidenceLabel } from "./valuation";
 import { hasDedicatedVram, hasMemoryTypeEstimates, hasTechApiMemoryData, memoryDescription, type MemoryTypeMetadata } from "./memory";
 
 export default function ListingDrawer({
@@ -173,7 +174,9 @@ export default function ListingDrawer({
                 <>
                   <span>
                     <TrendingDown size={15} />
-                    {item.valuation.discountPercent >= 0
+                    {item.valuation.reference?.kind === "component_floor"
+                      ? item.valuation.discountPercent >= 0 ? "Below component value" : "Above component value"
+                      : item.valuation.discountPercent >= 0
                       ? "Below reference"
                       : "Above reference"}
                   </span>
@@ -182,16 +185,18 @@ export default function ListingDrawer({
                     <small>%</small>
                   </strong>
                   <small>
-                    {item.valuation.opportunity
+                    {item.valuation.reference?.kind === "component_floor"
+                      ? "Partial parts total; whole-PC value is not established"
+                      : item.valuation.opportunity
                       ? `Meets ${canManage ? "your" : "the"} discount threshold`
-                      : `${canManage ? "Your" : "The"} threshold is ${settings?.discountPercent ?? 20}% below`}
+                      : `${canManage ? "Your" : "The"} threshold is ${settings?.discountPercent ?? 10}% below`}
                   </small>
                 </>
               ) : (
                 <>
                   <span>Price confidence</span>
-                  <strong className="no-value">{item.valuation.status === "indicative" ? "Indicative only" : "Needs evidence"}</strong>
-                  <small>{item.valuation.status === "indicative" ? item.valuation.reason : "No supported discount yet"}</small>
+                  <strong className="no-value">{evidenceLabel(item.valuation)}</strong>
+                  <small>{item.valuation.reason}</small>
                 </>
               )}
             </div>
@@ -272,11 +277,7 @@ export default function ListingDrawer({
                 <ShieldCheck size={22} />
                 <div>
                   <strong>
-                    {item.valuation.status === "needs_review"
-                      ? "Confirm the specifications first"
-                      : item.valuation.status === "excluded"
-                        ? "This listing is outside the working-used criteria"
-                        : "Not enough matching offers yet"}
+                    {evidenceLabel(item.valuation)}
                   </strong>
                   <p>{item.valuation.reason}</p>
                   <span>

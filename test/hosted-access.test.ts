@@ -107,7 +107,7 @@ test('public service responses ignore private state and economics before filteri
   } finally { store.close(); }
 });
 
-test('anonymous searches filter all retained local data offline rather than requiring a saved collection query', () => {
+test('anonymous searches filter the current collection offline and retain older local observations in history', () => {
   const { store, service, candidate } = fixture();
   try {
     const older = raw('older-retained', 5_000_000, { title: 'Retained Radeon card', description: 'Đồ họa đã qua sử dụng' });
@@ -115,9 +115,15 @@ test('anonymous searches filter all retained local data offline rather than requ
     store.putListing(raw('national-only', 3_000_000, { title: 'Retained Radeon national comparison' }), assessment(), false);
     store.setCollection('gpu', 'private collection query', [older.id]);
     assert.equal(service.listings('gpu', new URLSearchParams()).total, 1, 'admin collection semantics remain intact');
-    assert.equal(service.publicListings('gpu', new URLSearchParams()).total, 2);
-    assert.deepEqual(service.publicListings('gpu', new URLSearchParams('q=radeon')).items.map((i) => i.id), [older.id]);
-    assert.deepEqual(service.publicListings('gpu', new URLSearchParams('q=do+hoa')).items.map((i) => i.id), [older.id]);
+    assert.equal(service.publicListings('gpu', new URLSearchParams()).total, 1);
+    assert.equal(service.publicBootstrap().counts.gpu, 1);
+    assert.deepEqual(service.publicListings('gpu', new URLSearchParams('q=radeon')).items, []);
+    for (const q of ['radeon', 'do hoa']) {
+      const history = service.publicListings('gpu', new URLSearchParams({ view: 'history', q }));
+      assert.deepEqual(history.items.map(i => i.id), [older.id]);
+      assert.equal(history.items[0]?.observedAt, older.observedAt);
+      assert.deepEqual(history.items[0]?.state, EMPTY_STATE);
+    }
     assert.deepEqual(service.publicListings('gpu', new URLSearchParams('q=3060')).items.map((i) => i.id), [candidate.id]);
     assert.equal(service.publicListings('gpu', new URLSearchParams('q=empty-result')).total, 0);
   } finally { store.close(); }
@@ -158,8 +164,8 @@ test('public coverage depends only on matching retained market data and cannot p
     assert.deepEqual(queries.map((q) => service.publicListings('gpu', new URLSearchParams({ q }))), before);
     assert.deepEqual(before[1]!.coverage, { category: 'gpu', query: '3060', scanned: 1, limit: 1,
       totalAvailable: null, completedAt: candidate.observedAt, error: null, requestCount: 0 });
-    assert.equal(before[0]!.coverage?.scanned, 2);
-    assert.equal(before[0]!.coverage?.completedAt, '2099-01-01T00:00:00.000Z');
+    assert.equal(before[0]!.coverage?.scanned, 1);
+    assert.equal(before[0]!.coverage?.completedAt, candidate.observedAt);
     assert.equal(before[3]!.coverage, null); assert.equal(before[4]!.coverage, null);
     assert.equal(service.publicListings('laptop', new URLSearchParams()).coverage, null);
   } finally { store.close(); }
@@ -219,7 +225,7 @@ test('hosted administrative writes require exact origin and reject cross-site me
   }
   assert.equal((await write({ origin, 'sec-fetch-site': 'cross-site' })).status, 403);
   assert.equal((await write({ 'sec-fetch-site': 'cross-site' })).status, 403);
-  assert.equal(store.getSettings().discountPercent, 20, 'rejected writes leave settings unchanged');
+  assert.equal(store.getSettings().discountPercent, 10, 'rejected writes leave settings unchanged');
   assert.equal((await write({ origin, 'sec-fetch-site': 'same-origin' })).status, 200);
   assert.equal((await write({})).status, 200, 'trusted proxy token supports explicit command-line administration');
   assert.equal(store.getSettings().discountPercent, 21);
@@ -243,7 +249,7 @@ test('ambiguous URL encodings, traversal, prefix confusion and token spoofing ca
       assert.ok([400, 403, 404, 405].includes(result.status), `${path} with token=${withToken}: ${result.status}`);
     }
   }
-  assert.equal(store.getSettings().discountPercent, 20);
+  assert.equal(store.getSettings().discountPercent, 10);
 });
 
 test('unexpected public errors hide provider diagnostics, and local unrestricted loopback behavior remains compatible', async (t) => {

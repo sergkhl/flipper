@@ -71,6 +71,9 @@ backups and private deployment configuration are ignored by Git.
 
 1. Select Laptops, Desktops or Graphics cards, then use **Refresh market** or a
    model search. The current collection and its coverage stay visible.
+   The public feed uses the latest successful full category collection. Use
+   **Historical observations** for retained listings outside it, with retrieval
+   dates. Failed or cancelled refreshes keep the previous collection active.
 2. Filter by RAM, VRAM, district, asking price and discount. Defaults are at
    least 16 GB RAM for computers and 8 GB VRAM for included discrete graphics
    or standalone cards, with unknown capacities included. Integrated-only and
@@ -171,7 +174,11 @@ integration is configured. Operate one server process per data directory.
   If a desktop still has no supported complete-PC reference, verified GPU, CPU,
   RAM or SSD values can form a labeled **partial component baseline**. Each part
   needs at least five matching independent offers; omitted parts remain unpriced.
-- Default bargain gate: `(reference − asking) / reference ≥ 20%`, configurable.
+- Default bargain gate: `(reference − asking) / reference ≥ 10%`, configurable.
+- Complete and component-adjusted whole-item references supply **Below-market
+  finds**. Partial component baselines have a separate **Below component value**
+  label and filter. **Indicative comparisons** have their own view and do not
+  receive deal badges.
 - Seller descriptions must be retrieved before a price score is used. Missing
   or conflicting essential specs need review. References and local asking
   prices observed more than 24 hours ago do not produce current deal badges.
@@ -181,6 +188,13 @@ integration is configured. Operate one server process per data directory.
 
 These are asking-price comparisons and editable estimates. The app has no
 completed-sale dataset and does not verify a device's physical condition.
+
+Unambiguous one-model GPU advertisements at a whole-item price can be treated as
+one card; explicit bundles and conflicting prices remain in review. Gift values
+are excluded from asking-price checks. Quoted local parsing fills AI omissions
+without inventing specifications. An individual AI failure falls back to local
+rules; three consecutive failures pause AI for the job, and budget exhaustion
+stops further AI calls immediately. Collection and AI budget limits are unchanged.
 
 ## Collection and persistence
 

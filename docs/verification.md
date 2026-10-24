@@ -16,6 +16,17 @@ admission, competing ticks, busy/probe/maintenance deferral, pause, category
 failure, durable crash reservations, current-day-only recovery, budget isolation,
 overreported costs and private status/control.
 
+Evidence recovery tests reproduce promotional gift-price conflicts, AI omissions
+and unambiguous single-card quantities. They cover isolated versus repeated AI
+failures within the existing allowance, inclusive 10% scoring, separate partial
+component and indicative views, successful/failed/empty collection publication,
+dated history and private bookmark retention. Evidence labels distinguish stale
+asking prices, stale comparisons, sparse offers and configuration review.
+Unavailable ads are checked for retention without spending detail/AI/comparison
+capacity. Browser checks use isolated synthetic listings for current, indicative,
+historical and component-value views and their evidence drawers on desktop and
+mobile. No live provider or marketplace calls are needed for those UI checks.
+
 Market-opening checks cover read deadlines, stalled response bodies, caller
 cancellation and catalog updates. In a browser, check a stalled bootstrap,
 listings stalled after a slow bootstrap, a failed Retry and successful recovery.

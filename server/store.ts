@@ -111,6 +111,12 @@ export class Store {
       : this.db.prepare(`SELECT l.* FROM listings l JOIN collections c ON c.listing_id=l.id WHERE l.local=1 AND c.category=? AND c.query=?`).all(category, query);
     return rows.map((row) => this.decode(row));
   }
+  marketListings(category: Category, historical = false): StoredListing[] {
+    if (!historical) return this.localListings(category, '');
+    return this.db.prepare(`SELECT l.* FROM listings l WHERE l.local=1 AND l.category=?
+      AND NOT EXISTS (SELECT 1 FROM collections c WHERE c.category=l.category AND c.query='' AND c.listing_id=l.id)`)
+      .all(category).map(row => this.decode(row));
+  }
   setCollection(category: Category, query: string, ids: string[]): void {
     this.db.exec('BEGIN');
     try {
@@ -137,7 +143,8 @@ export class Store {
   }
   counts(): Record<Category, number> {
     return Object.fromEntries(['laptop', 'desktop', 'gpu'].map((category) => [category,
-      (this.db.prepare('SELECT COUNT(*) as n FROM listings WHERE local=1 AND category=?').get(category) as { n: number }).n])) as Record<Category, number>;
+      (this.db.prepare(`SELECT COUNT(*) as n FROM listings l JOIN collections c ON c.listing_id=l.id
+        WHERE l.local=1 AND l.category=? AND c.category=l.category AND c.query=''`).get(category) as { n: number }).n])) as Record<Category, number>;
   }
   saveCoverage(coverage: Coverage): void {
     this.db.prepare('INSERT INTO coverage(category,query,json) VALUES(?,?,?) ON CONFLICT(category,query) DO UPDATE SET json=excluded.json')

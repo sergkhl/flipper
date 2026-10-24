@@ -125,6 +125,7 @@ export function appServer(service: FlipperService, dist = resolve('dist'), optio
       if (retryCancel && req.method === 'POST') return json(res, { retry: service.cancelScanRetry(retryCancel[1]!) });
       if (path === '/api/listings' && readRequest) {
         const category = parse(categorySchema, url.searchParams.get('category') ?? 'laptop');
+        if (url.searchParams.has('view')) parse(z.enum(['all', 'saved', 'review', 'history', 'indicative', 'components']), url.searchParams.get('view'));
         for (const name of ['minRamGb', 'minVramGb']) if (url.searchParams.has(name)) {
           parse(z.string().trim().min(1).transform(Number).pipe(memoryMinimumSchema), url.searchParams.get(name));
         }

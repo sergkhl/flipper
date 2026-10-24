@@ -44,6 +44,7 @@ import type {
   SavedSearch,
 } from "../shared/types";
 import { ApiError, message, post, READ_TIMEOUT_MS, request } from "./api";
+import { evidenceLabel } from "./valuation";
 import {
   categoryLabels,
   compactMoney,
@@ -57,7 +58,11 @@ import ListingDrawer from "./ListingDrawer";
 import SettingsDrawer from "./SettingsDrawer";
 import { hasDedicatedVram, hasMemoryTypeEstimates, hasTechApiMemoryData, memoryDescription, ramMinimums, vramMinimums } from "./memory";
 
-type View = "all" | "saved" | "review";
+type View = "all" | "saved" | "review" | "history" | "indicative" | "components";
+const viewLabels: Record<Exclude<View, 'all'>, string> = {
+  saved: 'Shortlist', review: 'Review queue', history: 'Historical observations',
+  indicative: 'Indicative comparisons', components: 'Below component value',
+};
 const icons = { laptop: Laptop, desktop: Monitor, gpu: Cpu };
 const categories: Category[] = ["laptop", "desktop", "gpu"];
 
@@ -447,7 +452,7 @@ export default function App() {
   };
   const running = canManage && isRunning(job);
   const ai = canManage ? response?.ai || adminBootstrap.ai : null;
-  const threshold = bootstrap?.settings.discountPercent ?? 20;
+  const threshold = bootstrap?.settings.discountPercent ?? 10;
   const stats = response?.stats;
   const coverage = response?.coverage;
   const Icon = icons[category];
@@ -510,6 +515,13 @@ export default function App() {
           >
             <ShieldCheck size={18} />
             <span>Needs a closer look</span>
+          </button>
+          <button
+            className={`nav-item ${view === "history" ? "active" : ""}`}
+            onClick={() => { setView("history"); setOpportunities(false); }}
+          >
+            <Grid2X2 size={18} />
+            <span>Historical observations</span>
           </button>
         </nav>
         {canManage && <div className="saved-searches">
@@ -582,11 +594,7 @@ export default function App() {
             <span>Discover</span>
             <ChevronRight size={14} />
             <strong>
-              {view === "saved"
-                ? "Shortlist"
-                : view === "review"
-                  ? "Review queue"
-                  : categoryLabels[category]}
+              {view === "all" ? categoryLabels[category] : viewLabels[view]}
             </strong>
           </div>
           <div className="topbar-right">
@@ -620,6 +628,9 @@ export default function App() {
                   ? "Your shortlist."
                   : view === "review"
                     ? "Look a little closer."
+                    : view === "history" ? "Previously observed hardware."
+                    : view === "indicative" ? "Early price comparisons."
+                    : view === "components" ? "Below component value."
                     : "Good hardware. Better prices."}
               </h1>
               <p>
@@ -627,7 +638,10 @@ export default function App() {
                   ? "The finds you want to come back to. Price evidence stays one click away."
                   : view === "review"
                     ? "Missing specs, conflicting details, and listings that need your judgment."
-                    : "Find used laptops, desktops, and GPUs below the nationwide average."}
+                    : view === "history" ? "Retained observations outside the latest successful collection. Dates show when each price was retrieved; availability needs checking."
+                    : view === "indicative" ? "Three or four independent offers provide a starting point. More evidence is required for a confirmed find."
+                    : view === "components" ? "The asking price is below the supported value of identified parts. Omitted parts remain unpriced."
+                    : "Find used laptops, desktops, and GPUs from the latest successful collection."}
               </p>
             </div>
             {canManage ? <button
@@ -665,7 +679,7 @@ export default function App() {
               label="Below-market finds"
               value={stats?.opportunities ?? 0}
               icon={<TrendingDown size={18} />}
-              note={`At least ${threshold}% below reference`}
+              note={`At least ${threshold}% below whole-item reference`}
               accent
             />
             {canManage && <Stat
@@ -953,6 +967,7 @@ export default function App() {
                   className={`deal-filter ${opportunities ? "enabled" : ""}`}
                   onClick={() => setOpportunities(!opportunities)}
                   aria-pressed={opportunities}
+                  disabled={view === "components" || view === "indicative"}
                 >
                   <span className="toggle-track">
                     <span />
@@ -976,11 +991,14 @@ export default function App() {
                   <select
                     aria-label="Listing view"
                     value={view}
-                    onChange={(event) => setView(event.target.value as View)}
+                    onChange={(event) => { setView(event.target.value as View); setOpportunities(false); }}
                   >
                     <option value="all">Working used items</option>
                     {canManage && <option value="saved">Shortlist</option>}
                     <option value="review">{canManage ? "Needs review & dismissed" : "Needs review"}</option>
+                    <option value="indicative">Indicative comparisons ({stats?.indicative ?? 0})</option>
+                    <option value="components">Below component value ({stats?.componentOpportunities ?? 0})</option>
+                    <option value="history">Historical observations</option>
                   </select>
                   <ChevronDown size={12} />
                 </label>
@@ -1006,17 +1024,15 @@ export default function App() {
             <div className="results-heading">
               <div>
                 <h2>
-                  {view === "saved"
-                    ? "Shortlisted finds"
-                    : view === "review"
-                      ? "Review queue"
-                      : query
+                  {view !== "all" ? viewLabels[view] : query
                         ? `Results for “${query}”`
                         : `Discover ${categoryLabels[category].toLowerCase()}`}
                   <span>{response?.total ?? 0}</span>
                 </h2>
                 <p>
-                  Local asking prices, with matching used offers across Vietnam
+                  {view === "history" ? "Dated observations outside the current collection"
+                    : view === "components" ? "Identified parts with supported prices; whole-PC value remains unpriced"
+                    : "Local asking prices, with matching used offers across Vietnam"}
                 </p>
               </div>
               {loading && response && (
@@ -1068,6 +1084,9 @@ export default function App() {
                     ? "Make room for a good find."
                     : view === "review"
                       ? "Nothing in the review queue."
+                      : view === "history" ? "No historical observations match."
+                      : view === "indicative" ? "No indicative comparisons match."
+                      : view === "components" ? "No component-value finds match."
                       : coverage
                         ? opportunities
                           ? "No verified price gaps yet."
@@ -1079,6 +1098,9 @@ export default function App() {
                     ? "Use the bookmark on any listing to keep it here. Active memory and search filters also apply to your shortlist."
                     : view === "review"
                       ? "Listings with conflicting specifications, unclear prices, or other details to check appear here. Active filters also apply."
+                      : view === "history" ? "Observations outside the latest successful collection appear here with their retrieval dates. Active filters also apply."
+                      : view === "indicative" ? "Comparisons with at least three but fewer than the required number of independent sellers appear here without a deal badge."
+                      : view === "components" ? `The asking price must be at least ${threshold}% below independently supported component values. These are separate from whole-item market finds.`
                       : coverage
                         ? opportunities
                           ? `A find needs at least ${bootstrap?.settings.minComparables ?? 5} matching independent offers and a ${threshold}% price gap. ${canManage ? "Browse all items or collect more evidence." : "Try browsing all items."}`
@@ -1343,13 +1365,12 @@ function ListingCard({
           )}
         </button>
         <div className="image-tags">
-          {valuation.opportunity ? (
+          {valuation.opportunity || valuation.componentOpportunity ? (
             <span
               className={`deal-badge ${reference?.kind === "component_floor" ? "component-badge" : ""}`}
             >
               <TrendingDown size={13} />
-              {discount?.toFixed(0)}% below
-              {reference?.kind === "component_floor" ? " parts" : adjusted ? " adjusted reference" : " market"}
+              {valuation.componentOpportunity ? "Below component value" : `${discount?.toFixed(0)}% below${adjusted ? " adjusted reference" : " market"}`}
             </span>
           ) : (
             <span className="condition-badge">
@@ -1379,9 +1400,7 @@ function ListingCard({
         <div className="listing-location">
           <MapPin size={12} />
           <span>{item.district || item.region || "Da Nang"}</span>
-          {item.displayAge && (
-            <span className="listing-age">{item.displayAge}</span>
-          )}
+          <span className="listing-age" title={date(item.observedAt)}>Observed {timeAgo(item.observedAt)}</span>
         </div>
         <button className="listing-title" onClick={onOpen}>
           {item.title}
@@ -1443,11 +1462,7 @@ function ListingCard({
             <ShieldCheck size={15} />
             <div>
               <strong>
-                {valuation.status === "needs_review"
-                  ? "Specifications need review"
-                  : valuation.status === "excluded"
-                    ? "Outside the working-used criteria"
-                    : "More price evidence needed"}
+                {evidenceLabel(valuation)}
               </strong>
               <span>{valuation.reason}</span>
             </div>

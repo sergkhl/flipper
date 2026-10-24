@@ -27,6 +27,7 @@ function fixture(t: TestContext) {
   const sourceSearch = t.mock.method(source, 'search'), sourceDetail = t.mock.method(source, 'detail');
   const service = new FlipperService(store, source), candidate = raw('retained-candidate', 4_000_000);
   store.putListing(candidate, assessment(), true);
+  store.setCollection('gpu', '', [candidate.id]);
   t.after(async () => {
     const active = service.activeJob(); if (active) service.cancelJob(active.id);
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -126,7 +127,7 @@ test('the private deployment API exposes only busy status, freezes all mutations
   }
   assert.equal((await fetch(base + '/admin/api/bootstrap', { headers })).status, 200);
   assert.equal((await fetch(base + '/api/listings?category=gpu')).status, 200);
-  assert.equal(f.store.getSettings().discountPercent, 20); assert.equal(f.store.getListing(f.candidate.id)?.state.saved, false);
+  assert.equal(f.store.getSettings().discountPercent, 10); assert.equal(f.store.getListing(f.candidate.id)?.state.saved, false);
   assert.deepEqual(f.store.searches(), []);
   const cancellation = await fetch(base + '/admin/api/jobs/' + job.id + '/cancel', { method: 'POST', headers });
   assert.equal(cancellation.status, 200);
@@ -153,5 +154,5 @@ test('a mutation whose body finishes after the maintenance marker appears is rej
   await ready; writeFileSync(f.marker, 'deployment test'); req.end(payload);
   const result = await response;
   assert.equal(result.status, 503); assert.deepEqual(JSON.parse(result.body), { error: maintenanceMessage });
-  assert.equal(f.store.getSettings().discountPercent, 20);
+  assert.equal(f.store.getSettings().discountPercent, 10);
 });

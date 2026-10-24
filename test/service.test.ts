@@ -147,7 +147,9 @@ test('memory filters are inclusive, independently exclude known failures and opt
     for (const category of ['laptop', 'desktop'] as const) {
       const cases = [8, 16, null].flatMap((ramGb) => [4, 8, null].map((vramGb) => ({ id: `${category}-${ramGb}-${vramGb}`, ramGb, vramGb })));
       for (const item of cases) {
-        store.putListing(raw(item.id, 10_000_000, { category }), assessment({ ramGb: item.ramGb, vramGb: item.vramGb }, { kind: category, method: 'ai' }), true);
+        store.putListing(raw(item.id, 10_000_000, { category,
+          title: `RTX 3060${item.vramGb === null ? '' : ` ${item.vramGb}GB`} ${item.ramGb === null ? '' : `RAM ${item.ramGb}GB`}` }),
+          assessment({ ramGb: item.ramGb, vramGb: item.vramGb, gpuClass: category === 'laptop' ? 'mobile' : 'desktop' }, { kind: category, method: 'ai' }), true);
         store.setState(item.id, { saved: true });
       }
       store.setCollection(category, '', cases.map((item) => item.id));
@@ -665,7 +667,9 @@ test('local HTTP settings validate economic gates, never return a key and reject
       assert.equal((await fetch(base + '/api/searches', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Invalid filters', category: 'desktop', query: '', ...updates }) })).status, 400);
     }
     for (const [id, ramGb, vramGb] of [['api-matching', 32, 12], ['api-below-defaults', 16, 8], ['api-unknown', null, null]] as const) {
-      store.putListing(raw(id, 10_000_000, { category: 'desktop' }), assessment({ ramGb, vramGb }, { kind: 'desktop', method: 'ai' }), true);
+      store.putListing(raw(id, 10_000_000, { category: 'desktop',
+        title: `RTX 3060${vramGb === null ? '' : ` ${vramGb}GB`} ${ramGb === null ? '' : `RAM ${ramGb}GB`}` }),
+        assessment({ ramGb, vramGb }, { kind: 'desktop', method: 'ai' }), true);
     }
     store.setCollection('desktop', '', ['api-matching', 'api-below-defaults', 'api-unknown']);
     const defaultFeed = await (await fetch(base + '/api/listings?category=desktop')).json() as { items: { id: string }[] };

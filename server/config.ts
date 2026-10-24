@@ -4,7 +4,7 @@ export const MIMO_MODEL = 'xiaomi_mimo/mimo-v2.6-flash';
 // OpenRouter withdrew V1.1's endpoint around 2026-10-17; V1.2 is its 27B successor.
 export const DECIDER_MODEL = 'perplexity/pplx-decider-v1.2';
 // Increment when assessment prompts or validation change, so old AI interpretations are not reused.
-export const AI_ASSESSMENT_VERSION = 5;
+export const AI_ASSESSMENT_VERSION = 6;
 export interface LiteLLMEndpoints { chatCompletionsUrl: string; decisionsUrl: string; }
 
 // Read at client creation, after server/index.ts has loaded the project's .env.
@@ -18,7 +18,7 @@ export function liteLLMEndpoints(env: NodeJS.ProcessEnv = process.env): LiteLLME
 
 export const DEFAULT_SETTINGS: AppSettings = {
   minRamGb: 16, minVramGb: 8, includeUnknownMemory: true,
-  discountPercent: 20, minComparables: 5, minProfit: 500_000,
+  discountPercent: 10, minComparables: 5, minProfit: 500_000,
   minRoiPercent: 15, resaleFactor: 0.9,
   costReserves: { laptop: 500_000, desktop: 500_000, gpu: 200_000 },
   aiBudgetUsd: 0.25, scanLimit: 200, benchmarkLimit: 60, aiEnabled: true,
