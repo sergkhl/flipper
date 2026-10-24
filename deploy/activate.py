@@ -53,6 +53,8 @@ def main():
         raise RuntimeError('Checkout does not match the requested revision.')
     if run(['git', 'status', '--porcelain'], True).strip():
         raise RuntimeError('VPS checkout must be clean.')
+    # Direct VPS activation follows the same merge/push/cleanup policy as the CLI.
+    run(['node', 'deploy/verify-release.mjs', revision])
     env_path = ROOT / '.env'
     if not env_path.is_file() or stat.S_IMODE(env_path.stat().st_mode) != 0o600:
         raise RuntimeError('Private .env is missing or must have mode 0600.')

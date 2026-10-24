@@ -34,16 +34,42 @@ create ignored `.deployment/target.json` containing `{"host":"your-ssh-alias",
 The remote checkout must already be provisioned with its private environment,
 data directory, edge and Docker network.
 
-From a clean checkout:
+Before every routine deployment, validate and commit the task in its temporary
+worktree, integrate it into the primary `main` checkout, push, and remove the
+completed worktree. Run the following from the primary checkout, replacing the
+example task branch and worktree path:
 
 ```sh
+git switch main
+git fetch origin main
+git merge --ff-only origin/main
+git merge --no-ff task-branch
 git push origin main
+git worktree remove /path/to/task-worktree
+git branch -d task-branch
 npm run deploy -- HEAD
 ```
 
-Deployment verifies that the full selected revision is pushed to `origin/main`,
-runs local tests/build, takes a remote lock, refuses a dirty remote checkout,
-checks out the exact revision, and repeats tests/build inside the target image.
+Resolve any integration conflicts and rerun affected checks before pushing. Remove
+only the completed task worktree after its commits are included in the pushed
+main revision. Preserve unrelated unmerged/dirty worktrees and never remove the
+primary checkout or runtime data. `AGENTS.md` records this default agent workflow.
+
+Both `deploy/deploy.mjs` and direct `deploy/activate.py` activation enforce the
+shared `deploy/verify-release.mjs` preflight. It requires a clean primary checkout
+on `main`, with the selected revision equal to both local `main` and freshly
+fetched `origin/main`, and refuses clean fully merged linked worktrees that still
+need cleanup. The check never deletes worktrees. Detached and feature checkouts
+are rejected before build or service operations. It can be run independently:
+
+```sh
+node deploy/verify-release.mjs HEAD
+```
+
+Deployment runs local release-policy tests (`npm run test:release`) and the
+application tests/build, takes a remote lock, refuses a dirty remote
+checkout, fast-forwards the VPS primary `main` to the selected published revision,
+and repeats tests/build inside the target image.
 Activation creates `.data/.deployment-maintenance` before checking existing
 jobs/probes. New work, including scheduled work, defers; active work causes
 activation to abort. Only this service is replaced. Other services and the edge
@@ -54,6 +80,9 @@ verifies the image label and edge-to-service health revision, and records privat
 state in `.deploy-state.json`. Failed activation returns to the prior compatible
 image and Compose definition while retaining the current database. Backups and
 private deployment files are not committed.
+Emergency image rollback can select the previous verified detached revision.
+Return to the clean primary `main` workflow before the next routine deployment;
+keep unrelated archived/private history outside the published main lineage.
 
 ## Daily schedule and schema compatibility
 
