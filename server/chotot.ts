@@ -248,7 +248,7 @@ export class ChototClient {
   private starting: Promise<void> | null = null;
   private waiting = new Set<() => void>();
   private refilling = new WorkPool(1);
-  private readonly workerLimit: number;
+  private workerLimit: number;
   private jobError: unknown = null;
   private cooldown: SourceCooldown | null = null;
   private readonly cooldownStore?: CooldownStore;
@@ -264,9 +264,10 @@ export class ChototClient {
     this.cooldownStore = cooldownStore;
     this.now = now;
     this.requestStore = requestStore; this.proxies = proxies;
-    this.workerLimit = Math.max(1, Math.min(SOURCE_WORKERS, workers ?? (proxies ? SOURCE_WORKERS : 1)));
+    this.workerLimit = Math.max(1, Math.min(8, workers ?? (proxies ? SOURCE_WORKERS : 1)));
   }
   beginJob(context: SourceRequestContext): void {
+    if (context.workers !== undefined) this.workerLimit = Math.max(1, Math.min(8, context.workers));
     this.context = context; this.jobError = null; this.workers = []; this.starting = null; this.proxies?.beginJob();
   }
   endJob(): void { this.context = null; this.jobError = null; this.workers = []; this.starting = null; }

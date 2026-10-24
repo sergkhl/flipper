@@ -6,8 +6,9 @@ import { AI_ASSESSMENT_VERSION, DEFAULT_SETTINGS } from './config.ts';
 import { assessWithRules } from './hardware.ts';
 import type { AIReceipt, AppSettings, Assessment, Category, Coverage, DailyScanAttempt, DailyScanControl, ListingState, RawListing, ReferencePrice, RefreshJob, SavedSearch, ScanRetry, SourceCooldown } from '../shared/types.ts';
 import { DAILY_SCAN_BUDGET, DAILY_SCAN_CATEGORIES, DAILY_SCAN_CATEGORY_BUDGET, nextVietnamNoon, vietnamDay, vietnamNoon } from './scheduler.ts';
-import { SOURCE_REQUEST_LIMIT, SOURCE_CATEGORY_LIMIT, SOURCE_AUTOMATIC_LIMIT, SOURCE_WINDOW_MS, SOURCE_INTERVAL_MS, SourceDeferredError, type SourceBudgetStatus } from './source-policy.ts';
+import { SOURCE_WINDOW_MS, SOURCE_INTERVAL_MS, SourceDeferredError, type SourceBudgetStatus } from './source-policy.ts';
 import type { RefreshProgress } from '../shared/types.ts';
+import { type StoredRun, validateRunLimits } from './runs.ts';
 
 export interface PoolProgress { raws: RawListing[]; nextPage: number; exhausted: boolean; detailedIds: string[]; }
 
@@ -32,6 +33,8 @@ export class Store {
     this.db = new Database(memory ? ':memory:' : join(directory, 'flipper.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY, json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, root_id TEXT NOT NULL, state TEXT NOT NULL, updated_at TEXT NOT NULL, json TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS runs_root ON runs(root_id);
       CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, category TEXT NOT NULL, local INTEGER NOT NULL DEFAULT 0,
         raw TEXT NOT NULL, assessment TEXT NOT NULL, reference_json TEXT, reason TEXT NOT NULL, state TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY, listing_id TEXT NOT NULL, at TEXT NOT NULL, price REAL NOT NULL);
@@ -61,6 +64,95 @@ export class Store {
       CREATE UNIQUE INDEX IF NOT EXISTS scan_retries_pending_v2 ON scan_retries(category,query,scope) WHERE status IN ('waiting','running');`);
   }
   close(): void { this.db.close(); }
+  saveRun(run: StoredRun, now = new Date()): void {
+    this.db.prepare(`INSERT INTO runs(id,root_id,state,updated_at,json) VALUES(?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET state=excluded.state,updated_at=excluded.updated_at,json=excluded.json`)
+      .run(run.id, run.rootId, run.state, now.toISOString(), JSON.stringify(run));
+  }
+  getRun(id: string): StoredRun | null {
+    const row = this.db.prepare('SELECT json FROM runs WHERE id=?').get(id) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) : null;
+  }
+  runHistory(rootId: string): StoredRun[] {
+    return this.db.prepare('SELECT json FROM runs WHERE root_id=? ORDER BY rowid').all(rootId).map(row => JSON.parse(row.json as string));
+  }
+  latestRun(rootId: string): StoredRun | null {
+    const row = this.db.prepare('SELECT json FROM runs WHERE root_id=? ORDER BY rowid DESC LIMIT 1').get(rootId) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) : null;
+  }
+  listRuns(offset = 0, limit = 51): StoredRun[] {
+    return this.db.prepare(`SELECT r.json FROM runs r WHERE NOT EXISTS (SELECT 1 FROM runs newer WHERE newer.root_id=r.root_id AND newer.rowid>r.rowid)
+      ORDER BY CASE WHEN r.state IN ('collecting','assessing','comparing') THEN 0 WHEN r.state='waiting' THEN 1 ELSE 2 END, r.rowid DESC LIMIT ? OFFSET ?`)
+      .all(limit, offset).map(row => JSON.parse(row.json as string));
+  }
+  pruneRuns(now = new Date()): void {
+    const cutoff = new Date(now.getTime() - 90 * 86_400_000).toISOString();
+    this.db.prepare(`DELETE FROM runs WHERE root_id IN (SELECT r.root_id FROM runs r
+      WHERE r.state IN ('complete','cancelled') AND r.updated_at<?
+      AND NOT EXISTS (SELECT 1 FROM runs newer WHERE newer.root_id=r.root_id AND newer.rowid>r.rowid))`).run(cutoff);
+  }
+  interruptRuns(now = new Date()): void {
+    // Queue transitions are durable before the final journal write. Reconcile
+    // that small crash window before deciding which work was interrupted.
+    for (const row of this.db.prepare('SELECT json FROM scan_retries').all()) {
+      const retry: ScanRetry = JSON.parse(row.json as string), run = this.getRun(retry.job.id);
+      if (!run || !['collecting', 'assessing', 'comparing', 'waiting'].includes(run.state)) continue;
+      const state = retry.status === 'running' ? 'collecting' : retry.status;
+      this.saveRun({ ...run, state, retryId: retry.id, progress: retry.progress ?? run.progress,
+        job: { ...retry.job, status: state === 'interrupted' ? 'cancelled' : state,
+          aiCostUsd: Math.max(retry.spentUsd, run.job.aiCostUsd), ...(state === 'waiting' ? { resumeAt: retry.dueAt } : {}) } }, now);
+    }
+    const rows = this.db.prepare("SELECT json FROM runs WHERE state IN ('collecting','assessing','comparing')").all();
+    for (const row of rows) {
+      const run: StoredRun = JSON.parse(row.json as string);
+      run.state = 'interrupted';
+      run.job = { ...run.job, status: 'cancelled', completedAt: now.toISOString(),
+        aiCostUsd: Math.max(run.job.aiCostUsd, run.parameters.aiBudgetUsd),
+        message: 'Interrupted by restart. Resume explicitly; uncertain AI charges retain the original allowance.' };
+      this.saveRun(run, now);
+    }
+    this.pruneRuns(now);
+  }
+  /** Import only known legacy snapshots; unavailable manual history is not invented. */
+  importRunHistory(now = new Date(), onlyRetry?: string): void {
+    if (!onlyRetry && this.runtimeValue<boolean>('runs_history_imported')) return;
+    const cutoff = now.getTime() - 90 * 86_400_000;
+    const existing = new Set(this.db.prepare('SELECT id FROM runs').all().map(row => row.id));
+    const add = (job: RefreshJob, settings: AppSettings, state: StoredRun['state'], metadata: Partial<StoredRun>) => {
+      if (existing.has(job.id) || (['complete', 'cancelled'].includes(state) && Date.parse(job.completedAt ?? job.startedAt) < cutoff)) return;
+      settings = { ...DEFAULT_SETTINGS, ...settings, scanLimit: job.target };
+      if (state === 'interrupted') job = { ...job, aiCostUsd: Math.max(job.aiCostUsd, settings.aiBudgetUsd) };
+      const { scanLimit, benchmarkLimit, aiBudgetUsd, aiEnabled, minRamGb, minVramGb, includeUnknownMemory } = settings;
+      this.saveRun({ id: job.id, rootId: job.retryOf ?? job.id, job, state, settings,
+        parameters: { scanLimit, benchmarkLimit, aiBudgetUsd, aiEnabled, minRamGb, minVramGb, includeUnknownMemory },
+        workers: { marketplaceWorkers: settings.marketplaceWorkers, aiWorkers: settings.aiWorkers },
+        automatic: false, aiIssue: null,
+        progress: { ids: [], nextPage: 1, collected: false, assessedIds: [], comparedIds: [], initialDetails: 0 }, ...metadata,
+      }, new Date(job.completedAt ?? job.startedAt));
+    };
+    for (const row of onlyRetry ? [] : this.db.prepare('SELECT json,settings_json FROM daily_scan_attempts ORDER BY day, rowid').all()) {
+      const attempt: DailyScanAttempt = JSON.parse(row.json as string);
+      if (attempt.job) add(attempt.job, JSON.parse(row.settings_json as string),
+        attempt.status === 'running' ? attempt.job.status : attempt.status,
+        { automatic: true, scheduledDay: attempt.day, aiIssue: attempt.aiIssue });
+    }
+    // Retry snapshots carry the most useful checkpoint and waiting state.
+    for (const row of this.db.prepare('SELECT json,settings_json FROM scan_retries WHERE (? IS NULL OR id=?) ORDER BY rowid').all(onlyRetry ?? null, onlyRetry ?? null)) {
+      const retry: ScanRetry = JSON.parse(row.json as string);
+      add({ ...retry.job, ...(retry.status === 'waiting' ? { status: 'waiting', resumeAt: retry.dueAt } : {}),
+        aiCostUsd: Math.max(retry.spentUsd, retry.job.aiCostUsd) },
+      { ...JSON.parse(row.settings_json as string), aiBudgetUsd: retry.budgetUsd },
+      retry.status === 'running' ? retry.job.status : retry.status,
+      { rootId: retry.originalJobId, retryId: retry.id, automatic: retry.automatic ?? retry.dailyDay !== null,
+        listingId: retry.listingId, scheduledDay: retry.dailyDay ?? undefined, aiIssue: retry.aiIssue,
+        ...(retry.progress ? { progress: retry.progress } : {}) });
+    }
+    if (!onlyRetry) this.setRuntimeValue('runs_history_imported', true);
+  }
+  scanRetry(id: string): ScanRetry | null {
+    const row = this.db.prepare('SELECT json FROM scan_retries WHERE id=?').get(id) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) : null;
+  }
   deploymentMaintenanceActive(): boolean { return existsSync(join(this.directory, '.deployment-maintenance')); }
   getSettings(): AppSettings {
     const row = this.db.prepare('SELECT json FROM settings WHERE id=1').get() as { json: string } | undefined;
@@ -68,6 +160,7 @@ export class Store {
       : structuredClone(DEFAULT_SETTINGS);
   }
   saveSettings(settings: AppSettings): void {
+    validateRunLimits(settings);
     this.db.prepare('INSERT INTO settings(id,json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET json=excluded.json').run(JSON.stringify(settings));
   }
   getKey(): string {
@@ -203,14 +296,15 @@ export class Store {
     this.db.prepare('INSERT OR REPLACE INTO source_runtime(key,json) VALUES(?,?)').run(key, JSON.stringify(value));
   }
   sourceBudgetStatus(now = new Date()): SourceBudgetStatus {
+    const limits = this.getSettings();
     const cutoff = new Date(now.getTime() - SOURCE_WINDOW_MS).toISOString();
     const rows = this.db.prepare('SELECT category,automatic,COUNT(*) AS n FROM source_requests WHERE at>? GROUP BY category,automatic').all(cutoff) as { category: Category; automatic: number; n: number }[];
     const categoryUsed: Record<Category, number> = { laptop: 0, desktop: 0, gpu: 0 };
     let used = 0, automaticUsed = 0;
     for (const row of rows) { used += row.n; if (row.automatic) { automaticUsed += row.n; categoryUsed[row.category] += row.n; } }
-    return { limit: SOURCE_REQUEST_LIMIT, used, automaticUsed, manualUsed: used - automaticUsed, categoryUsed,
-      remaining: Math.max(0, SOURCE_REQUEST_LIMIT - used), automaticCategoryLimit: SOURCE_CATEGORY_LIMIT,
-      manualReserve: SOURCE_REQUEST_LIMIT - SOURCE_AUTOMATIC_LIMIT,
+    return { limit: limits.requestLimit, used, automaticUsed, manualUsed: used - automaticUsed, categoryUsed,
+      remaining: Math.max(0, limits.requestLimit - used), automaticCategoryLimit: limits.automaticCategoryRequestLimit,
+      manualReserve: limits.requestLimit - limits.automaticRequestLimit,
       nextRequestAt: this.runtimeValue<string>('next_source_request') };
   }
   /** Reserve before dispatch; an interrupted attempt remains charged. */
@@ -218,15 +312,15 @@ export class Store {
     pacing?: { worker: string; proxy: string }): string | null {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      const status = this.sourceBudgetStatus(now), cutoff = new Date(now.getTime() - SOURCE_WINDOW_MS).toISOString();
+      const status = this.sourceBudgetStatus(now), limits = this.getSettings(), cutoff = new Date(now.getTime() - SOURCE_WINDOW_MS).toISOString();
       const deadlines: number[] = [];
       const oldest = (where: string, args: Array<string | number>) => {
         const row = this.db.prepare(`SELECT MIN(at) AS at FROM source_requests WHERE at>? ${where}`).get(cutoff, ...args) as { at: string };
         return Date.parse(row.at) + SOURCE_WINDOW_MS;
       };
-      if (status.used >= SOURCE_REQUEST_LIMIT) deadlines.push(oldest('', []));
-      if (automatic && status.automaticUsed >= SOURCE_AUTOMATIC_LIMIT) deadlines.push(oldest('AND automatic=1', []));
-      if (automatic && status.categoryUsed[category] >= SOURCE_CATEGORY_LIMIT) deadlines.push(oldest('AND automatic=1 AND category=?', [category]));
+      if (status.used >= limits.requestLimit) deadlines.push(oldest('', []));
+      if (automatic && status.automaticUsed >= limits.automaticRequestLimit) deadlines.push(oldest('AND automatic=1', []));
+      if (automatic && status.categoryUsed[category] >= limits.automaticCategoryRequestLimit) deadlines.push(oldest('AND automatic=1 AND category=?', [category]));
       if (deadlines.length) throw new SourceDeferredError(new Date(Math.max(...deadlines)).toISOString(), 'request_budget');
       const keys = pacing ? [`source_worker:${pacing.worker}`, `source_proxy:${createHash('sha256').update(new URL(pacing.proxy).hostname).digest('hex')}`] : ['next_source_request'];
       const next = Math.max(0, ...keys.map(key => Date.parse(this.runtimeValue<string>(key) ?? '') || 0));
@@ -292,35 +386,21 @@ export class Store {
       .run(retry.status, retry.dueAt, JSON.stringify(retry), retry.id);
   }
   /** A retry and a due daily category share one job and the tighter captured allowance. */
-  claimScanRetry(now: Date): { retry: ScanRetry; settings: AppSettings } | null {
+  claimScanRetry(now: Date, id?: string): { retry: ScanRetry; settings: AppSettings } | null {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const cooldown = this.sourceCooldown();
       if (cooldown && Date.parse(cooldown.until) > now.getTime()) { this.db.exec('COMMIT'); return null; }
-      const row = this.db.prepare("SELECT json,settings_json FROM scan_retries WHERE status='waiting' AND due_at<=? ORDER BY due_at, rowid LIMIT 1")
-        .get(now.toISOString()) as { json: string; settings_json: string } | undefined;
+      const row = this.db.prepare("SELECT json,settings_json FROM scan_retries WHERE status='waiting' AND due_at<=? AND (? IS NULL OR id=?) ORDER BY due_at, rowid LIMIT 1")
+        .get(now.toISOString(), id ?? null, id ?? null) as { json: string; settings_json: string } | undefined;
       if (!row) { this.db.exec('COMMIT'); return null; }
       const retry: ScanRetry = JSON.parse(row.json);
       let settings: AppSettings = JSON.parse(row.settings_json);
       const day = vietnamDay(now);
       const current = this.getSettings();
-      const automatic = retry.automatic ?? retry.dailyDay !== null;
-      if (automatic && retry.query === '' && !retry.listingId) settings = { ...current, aiBudgetUsd: Math.min(settings.aiBudgetUsd, retry.budgetUsd) };
-      const target = automatic ? current.scanLimit : retry.job.target;
-      settings = { ...settings, benchmarkLimit: Math.min(settings.benchmarkLimit, 60) };
-      retry.budgetUsd = Math.min(retry.budgetUsd, settings.aiBudgetUsd, current.aiBudgetUsd);
-      // An earlier shrink may have discarded source-page members; do not skip them on expansion.
-      if (target > retry.job.target && retry.progress?.truncated) retry.progress = undefined;
-      if (target !== retry.job.target && retry.progress?.raws) {
-        const progress = retry.progress;
-        // Keep paid-for fresh work when the latest automatic collection size changes.
-        if (target > retry.job.target && progress.raws!.length >= retry.job.target) progress.collected = false;
-        if (progress.raws!.length > target) progress.truncated = true;
-        progress.raws = progress.raws!.slice(0, target); progress.ids = progress.raws.map(raw => raw.id);
-        progress.assessedIds = progress.assessedIds.filter(id => progress.ids.includes(id));
-        progress.comparedIds = progress.comparedIds.filter(id => progress.ids.includes(id));
-      }
-      retry.job = { ...retry.job, target };
+      // Scope and AI allowance belong to the run. Only worker counts follow current settings.
+      settings = { ...DEFAULT_SETTINGS, ...settings, marketplaceWorkers: current.marketplaceWorkers, aiWorkers: current.aiWorkers,
+        benchmarkLimit: Math.min(settings.benchmarkLimit, 60), aiBudgetUsd: retry.budgetUsd };
       const sharesDailyScope = !retry.listingId && retry.query === '' && retry.job.target === current.scanLimit
         && settings.benchmarkLimit === Math.min(current.benchmarkLimit, 60)
         && (['minRamGb', 'minVramGb', 'includeUnknownMemory', 'aiEnabled'] as const).every(key => settings[key] === current[key]);

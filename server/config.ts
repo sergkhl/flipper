@@ -17,6 +17,7 @@ export function liteLLMEndpoints(env: NodeJS.ProcessEnv = process.env): LiteLLME
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
+  marketplaceWorkers: 4, aiWorkers: 4, requestLimit: 700, automaticRequestLimit: 450, automaticCategoryRequestLimit: 150,
   minRamGb: 16, minVramGb: 8, includeUnknownMemory: true,
   discountPercent: 10, minComparables: 5, minProfit: 500_000,
   minRoiPercent: 15, resaleFactor: 0.9,

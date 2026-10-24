@@ -56,6 +56,7 @@ import {
 } from "./format";
 import ListingDrawer from "./ListingDrawer";
 import SettingsDrawer from "./SettingsDrawer";
+import Runs from "./Runs";
 import { hasDedicatedVram, hasMemoryTypeEstimates, hasTechApiMemoryData, memoryDescription, ramMinimums, vramMinimums } from "./memory";
 
 type View = "all" | "saved" | "review" | "history" | "indicative" | "components";
@@ -67,6 +68,7 @@ const icons = { laptop: Laptop, desktop: Monitor, gpu: Cpu };
 const categories: Category[] = ["laptop", "desktop", "gpu"];
 
 export default function App() {
+  const [runsOpen, setRunsOpen] = useState(() => new URLSearchParams(window.location.search).get('page') === 'runs');
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
   const [response, setResponse] = useState<ListingsResponse | null>(null);
   const [category, setCategory] = useState<Category>(() => {
@@ -128,6 +130,7 @@ export default function App() {
     }
     setBootstrap(result);
     if (result.access !== "admin") {
+      setRunsOpen(false);
       setJob(null);
       setSettingsOpen(false);
       setSaveSearchOpen(false);
@@ -230,6 +233,7 @@ export default function App() {
 
   useEffect(() => {
     const url = new URL(window.location.href);
+    if (runsOpen) url.searchParams.set('page', 'runs'); else url.searchParams.delete('page');
     if (selectedId) {
       url.searchParams.set("listing", selectedId);
       url.searchParams.set("category", category);
@@ -237,7 +241,7 @@ export default function App() {
       url.searchParams.delete("listing");
     }
     window.history.replaceState(null, "", url);
-  }, [selectedId, category]);
+  }, [selectedId, category, runsOpen]);
 
   useEffect(() => {
     if (!canManage || !job || !isRunning(job)) return;
@@ -301,6 +305,7 @@ export default function App() {
   const closeDetail = useCallback(() => setSelectedId(null), []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const changeCategory = (next: Category) => {
+    setRunsOpen(false);
     setCategory(next);
     setQuery("");
     setQueryInput("");
@@ -389,6 +394,7 @@ export default function App() {
   };
   const useSearch = (search: SavedSearch) => {
     if (!canManage) return;
+    setRunsOpen(false);
     setCategory(search.category);
     setQuery(search.query);
     setQueryInput(search.query);
@@ -490,7 +496,7 @@ export default function App() {
             return (
               <button
                 key={value}
-                className={`nav-item ${category === value && view === "all" ? "active" : ""}`}
+                className={`nav-item ${!runsOpen && category === value && view === "all" ? "active" : ""}`}
                 onClick={() => changeCategory(value)}
               >
                 <CategoryIcon size={19} />
@@ -502,9 +508,10 @@ export default function App() {
             );
           })}
           <span className="nav-heading nav-spaced">{canManage ? "YOUR WORKSPACE" : "MARKET EVIDENCE"}</span>
+          {canManage && <button className={`nav-item ${runsOpen ? 'active' : ''}`} onClick={() => setRunsOpen(true)}><RefreshCw size={18} /><span>Runs</span></button>}
           {canManage && <button
-            className={`nav-item ${view === "saved" ? "active" : ""}`}
-            onClick={() => setView("saved")}
+            className={`nav-item ${!runsOpen && view === "saved" ? "active" : ""}`}
+            onClick={() => { setRunsOpen(false); setView("saved"); }}
           >
             <Bookmark size={18} />
             <span>Shortlist</span>
@@ -513,15 +520,15 @@ export default function App() {
             )}
           </button>}
           <button
-            className={`nav-item ${view === "review" ? "active" : ""}`}
-            onClick={() => setView("review")}
+            className={`nav-item ${!runsOpen && view === "review" ? "active" : ""}`}
+            onClick={() => { setRunsOpen(false); setView("review"); }}
           >
             <ShieldCheck size={18} />
             <span>Needs a closer look</span>
           </button>
           <button
-            className={`nav-item ${view === "history" ? "active" : ""}`}
-            onClick={() => { setView("history"); setOpportunities(false); }}
+            className={`nav-item ${!runsOpen && view === "history" ? "active" : ""}`}
+            onClick={() => { setRunsOpen(false); setView("history"); setOpportunities(false); }}
           >
             <Grid2X2 size={18} />
             <span>Historical observations</span>
@@ -597,10 +604,11 @@ export default function App() {
             <span>Discover</span>
             <ChevronRight size={14} />
             <strong>
-              {view === "all" ? categoryLabels[category] : viewLabels[view]}
+              {runsOpen && canManage ? 'Runs' : view === "all" ? categoryLabels[category] : viewLabels[view]}
             </strong>
           </div>
           <div className="topbar-right">
+            {canManage && <button className="button subtle runs-link" onClick={() => setRunsOpen(value => !value)}>{runsOpen ? 'Market' : 'Runs'}</button>}
             <span className="nationwide-label">
               <ShieldCheck size={14} /> Nationwide benchmarks
             </span>
@@ -620,7 +628,12 @@ export default function App() {
             </a>
           </div>
         </header>
-        <section className="page-content">
+        {runsOpen && adminBootstrap ? <Runs settings={adminBootstrap.settings} onJob={setJob} onResults={run => {
+          changeCategory(run.job.category); setQuery(run.job.query); setQueryInput(run.job.query);
+          setMaxPrice(''); setOpportunities(false); setMinRamGb(run.parameters.minRamGb); setMinVramGb(run.parameters.minVramGb);
+          setIncludeUnknownMemory(run.parameters.includeUnknownMemory); setReload(value => value + 1);
+          if (run.listingId) setSelectedId(run.listingId);
+        }} /> : <section className="page-content">
           <div className="page-heading">
             <div>
               <div className="page-kicker">
@@ -1227,7 +1240,7 @@ export default function App() {
               <ChevronRight size={18} />
             </button>
           )}
-        </section>
+        </section>}
       </main>
 
       {selectedId && (

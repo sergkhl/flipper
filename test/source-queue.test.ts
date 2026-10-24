@@ -132,7 +132,7 @@ test('a later configuration extends the shared national pool instead of repeatin
   } finally { await service.shutdown(); store.close(); }
 });
 
-test('a waiting automatic scan merges the latest settings with daily work while preserving prior AI spending', async () => {
+test('a waiting automatic scan retains its scope and budget when defaults change', async () => {
   const store = new Store('', true); configure(store);
   let now = new Date('2026-10-24T05:00:00Z'), blocked = true;
   const resumeAt = '2026-10-25T05:00:00.000Z', calls: string[] = [];
@@ -153,10 +153,12 @@ test('a waiting automatic scan merges the latest settings with daily work while 
     store.saveSettings({ ...store.getSettings(), scanLimit: 80, minRamGb: 32, aiBudgetUsd: .1 });
     now = new Date(resumeAt); blocked = false;
     const resumed = service.tryStartDailyRefresh(now)!;
-    assert.equal(resumed.target, 80); assert.equal(resumed.aiCostUsd, .04);
+    assert.equal(resumed.target, 100); assert.equal(resumed.aiCostUsd, .04);
     assert.equal((await settled(service, resumed.id)).status, 'complete');
-    const latest = store.dailyScanAttempts('2026-10-25')[0]!;
-    assert.equal(latest.category, 'laptop'); assert.equal(latest.job?.id, resumed.id);
+    assert.equal(store.dailyScanAttempts('2026-10-25').length, 0, 'changed scope does not absorb a new daily run');
+    const resumedRun = store.getRun(resumed.id)!;
+    assert.equal(resumedRun.parameters.minRamGb, 16);
+    assert.equal(resumedRun.parameters.aiBudgetUsd, .25);
     assert.equal(store.scanRetries().filter(item => item.category === 'laptop').length, 1);
     assert.equal(store.scanRetries()[0]!.spentUsd, .04);
     assert.equal(calls.filter(value => value.startsWith('laptop:')).length, 2);
@@ -258,7 +260,7 @@ test('resuming a scan retains its twelve-configuration comparison bound', async 
   } finally { await service.shutdown(); store.close(); }
 });
 
-test('raising the automatic collection size extends fresh queued work with the latest setting', async () => {
+test('raising the default collection size leaves an existing automatic run unchanged', async () => {
   const store = new Store('', true); configure(store); store.saveSettings({ ...store.getSettings(), scanLimit: 20 });
   let now = new Date('2026-10-24T05:00:00Z'), blocked = true;
   const until = '2026-10-24T06:00:00.000Z', pages: number[] = [];
@@ -280,7 +282,7 @@ test('raising the automatic collection size extends fresh queued work with the l
     assert.equal((await settled(service, first.id)).status, 'waiting');
     store.saveSettings({ ...store.getSettings(), scanLimit: 40 }); now = new Date(until); blocked = false;
     const resumed = service.tryStartDailyRefresh(now)!;
-    assert.equal(resumed.target, 40); assert.equal((await settled(service, resumed.id)).status, 'complete');
-    assert.equal(resumed.scanned, 25); assert.deepEqual(pages, [1, 2]);
+    assert.equal(resumed.target, 20); assert.equal((await settled(service, resumed.id)).status, 'complete');
+    assert.equal(resumed.scanned, 20); assert.deepEqual(pages, [1]);
   } finally { await service.shutdown(); store.close(); }
 });

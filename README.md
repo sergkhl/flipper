@@ -83,7 +83,13 @@ backups and private deployment configuration are ignored by Git.
    when a bounded category refresh has not yet compared their configuration.
 4. Bookmark or dismiss listings and save searches in the personal workspace.
    Saved searches restore filters; saving one does not create a scan schedule.
-5. Use **Settings & AI** for memory defaults, price thresholds, optional model
+5. Open **Runs** to launch refreshes, inspect progress and errors, retry/resume or
+   cancel work, and edit worker counts and request allowances. Run history and
+   attempts persist across restarts; completed/cancelled history is kept for 90
+   days. Retry/Resume retains progress and spending. Run again creates a separate
+   manual run with a fresh allowance. Existing scheduled/recovery snapshots are
+   imported; older in-memory manual history is unavailable.
+6. Use **Settings & AI** for memory defaults, price thresholds, optional model
    access, and the separate daily-scan controls.
 
 Seller-stated, manufacturer-inferred and possible memory types are labeled
@@ -216,16 +222,21 @@ Pools are reused within the job. Remaining listings explicitly say they have not
 been benchmarked and can be analyzed individually. Additional description checks
 are made for candidates that are about to be priced.
 
-All marketplace routes share a persistent **700-request rolling 24-hour limit**,
-including retries, redirects and failures. Automatic work has a 150-request
+All marketplace routes share a persistent rolling 24-hour limit, **700 requests by default**,
+including retries, redirects and failures. By default, automatic work has a 150-request
 category ceiling and a 450-request total ceiling, reserving at least 250 for
-manual analysis. Up to four proxy workers run concurrently, at least three seconds
-between starts per worker. Four AI assessment workflows can run concurrently over
+manual analysis. Four proxy workers run concurrently by default, at least three seconds
+between starts per worker. Four AI assessment workflows run concurrently by default over
 the direct gateway, reserving against the same original job budget. National
 queries share pagination and stop small assessment batches once enough valid
 independent offers exist. Exhausted allowance and unavailable proxies queue unfinished work for
 automatic resumption with its progress and cumulative AI spending intact.
-Overlapping automatic work shares one queue entry and current settings.
+Overlapping automatic work shares one queue entry and its captured parameters.
+Private **Runs** controls can set marketplace and AI workers independently from
+1 to 8, and change total/automatic/per-category request allowances. Worker changes
+apply on the next start or resume; request limits apply to subsequent admissions
+without clearing usage. Run targets, memory filters, comparison bounds and AI
+allowances remain fixed. A new run is needed to change those parameters.
 
 Public HTTPS marketplace requests use runtime candidates from
 [monosans](https://github.com/monosans/proxy-list) and
@@ -235,8 +246,9 @@ routes, and fewer workers continue if fewer routes work. A 429 retains the globa
 already-started calls finish before checkpointing, while new calls wait.
 Unavailable proxies pause collection without direct fallback. LiteLLM and admin
 credentials stay outside these routes. Private Settings shows usage and queue
-status. [ADR 0009](docs/adr/0009-marketplace-request-budget-and-proxy-routing.md)
-and [ADR 0010](docs/adr/0010-parallel-marketplace-and-ai-workers.md) record the policy.
+status. [ADR 0009](docs/adr/0009-marketplace-request-budget-and-proxy-routing.md),
+[ADR 0010](docs/adr/0010-parallel-marketplace-and-ai-workers.md), and
+[ADR 0011](docs/adr/0011-private-run-controls-and-durable-history.md) record the policy.
 
 Nationwide raw pools and partial progress can be reused for six hours; AI
 assessments are cached by listing content and asking price. Source failures retain
