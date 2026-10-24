@@ -27,6 +27,18 @@ capacity. Browser checks use isolated synthetic listings for current, indicative
 historical and component-value views and their evidence drawers on desktop and
 mobile. No live provider or marketplace calls are needed for those UI checks.
 
+Request-control tests cover the rolling 500-attempt ceiling, 150 automatic
+attempts per category, manual reserve, exact expiration, persistent pacing and
+shared SQLite reservations. Proxy tests mock both lists, unsafe endpoint input,
+sticky routing, bounded network failover, empty pools, catalog outages, default
+port normalization, redirects, complete response-body serialization and a 429
+that blocks every route across restart. Queue tests cover partial local/national
+resumption, duplicate-seller pagination, reuse/extension of shared pools, manual
+analysis alongside queued category work, fresh timestamps, daily coalescing,
+latest settings and automatic versus on-demand component searches. Live public
+proxy connectivity is checked separately without marketplace calls during an
+active source cooldown.
+
 Market-opening checks cover read deadlines, stalled response bodies, caller
 cancellation and catalog updates. In a browser, check a stalled bootstrap,
 listings stalled after a slow bootstrap, a failed Retry and successful recovery.

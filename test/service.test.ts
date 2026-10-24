@@ -133,10 +133,10 @@ test('local and national collection continue after a source page loses unusable 
     assert.equal(job.status, 'complete');
     assert.equal(job.scanned, 45);
     assert.equal(service.listings('gpu', new URLSearchParams()).total, 45);
-    for (const location of ['danang', 'nationwide']) {
-      assert.deepEqual(visited.filter((call) => call.location === location).map((call) => call.page), [1, 2, 3]);
-    }
-    assert.equal(service.detail('pagination-0')?.valuation.reference?.sampleCount, 44);
+    assert.deepEqual(visited.filter((call) => call.location === 'danang').map((call) => call.page), [1, 2, 3]);
+    assert.deepEqual(visited.filter((call) => call.location === 'nationwide').map((call) => call.page), [1],
+      'enough matching independent offers stop national pagination early');
+    assert.equal(service.detail('pagination-0')?.valuation.reference?.sampleCount, 18);
   } finally { store.close(); }
 });
 
@@ -330,7 +330,7 @@ test('bounded refresh spends detail and comparison work on the active RAM filter
   }
 });
 
-test('refresh prioritizes all applicable memory minima, then unknown capacities, then known failures without changing its detail budget', async () => {
+test('refresh prioritizes memory matches for ten initial details and verifies additional priced candidates', async () => {
   const store = new Store('', true);
   store.saveSettings({ ...store.getSettings(), aiEnabled: false, minRamGb: 16, minVramGb: 8, includeUnknownMemory: false });
   const pc = (id: string, price: number, ram: number | null, gpu: string) => raw(id, price, {
@@ -362,7 +362,7 @@ test('refresh prioritizes all applicable memory minima, then unknown capacities,
   try {
     assert.equal((await completed(service, service.refresh('desktop', '', all.length).id)).status, 'complete');
     assert.deepEqual(details.slice(0, 8), [integrated.id, absent.id, matching.id, unknownRam.id, unknownVram.id, knownFailUnknownOther.id, failVram.id, failRam.id]);
-    assert.equal(details.length, 30);
+    assert.equal(details.length, 13, 'ten initial detail reads plus three verified comparison candidates');
     assert.ok(comparisons.length > 0);
     assert.equal(service.listings('desktop', new URLSearchParams()).total, 3);
     assert.equal(store.getSettings().aiBudgetUsd, .25);
@@ -590,7 +590,7 @@ test('national computer detail budget reaches matching high-RAM PCs beyond cheap
   try {
     assert.equal((await completed(service, service.analyze(candidate.id).id)).status, 'complete');
     assert.deepEqual(detailed.filter((id) => id !== candidate.id).slice(0, 5), peers.slice(20).map((peer) => peer.id));
-    assert.equal(detailed.filter((id) => id !== candidate.id).length, 20);
+    assert.equal(detailed.filter((id) => id !== candidate.id).length, 5, 'stop details once five matching independent offers support a price');
     assert.equal(service.detail(candidate.id)?.valuation.reference?.sampleCount, 5);
   } finally { store.close(); }
 });
@@ -610,6 +610,8 @@ test('local HTTP settings validate economic gates, never return a key and reject
     assert.equal('openRouterKey' in bootstrap, false);
     const invalid = await fetch(base + '/api/settings', { method: 'POST', headers: { 'content-type':'application/json' }, body: JSON.stringify({ minComparables: 4 }) });
     assert.equal(invalid.status, 400);
+    const oversizedPool = await fetch(base + '/api/settings', { method: 'POST', headers: { 'content-type':'application/json' }, body: JSON.stringify({ benchmarkLimit: 61 }) });
+    assert.equal(oversizedPool.status, 400);
     const forbidden = await fetch(base + '/api/settings', { method:'POST', headers: { 'content-type':'application/json', origin:'https://example.com' }, body: JSON.stringify({ discountPercent: 30 }) });
     assert.equal(forbidden.status, 403);
     const settings = await fetch(base + '/api/settings', { method:'POST', headers: { 'content-type':'application/json' }, body: JSON.stringify({ discountPercent: 25, costReserves: { gpu: 300_000 }, minRamGb: 32, minVramGb: 12, includeUnknownMemory: false, liteLlmKey: 'settings-gateway-fixture' }) });

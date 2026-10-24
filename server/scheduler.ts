@@ -29,12 +29,14 @@ export function dailyScanStatus(store: Store, active: RefreshJob | null, busy: b
   const eligible = control.enabled && control.firstDueAt !== null && Date.parse(control.firstDueAt) <= now.getTime()
     && vietnamNoon(now) <= now.getTime() && today.length < DAILY_SCAN_CATEGORIES.length;
   const running = attempts.some(attempt => attempt.status === 'running');
-  const cooldown = activeCooldown(store.sourceCooldown(), now), retries = store.scanRetries();
+  const cooldown = activeCooldown(store.sourceCooldown(), now), retries = store.scanRetries().map(({ progress: _progress, ...retry }) => retry);
   for (const retry of retries) if (active && retry.job.id === active.id) {
     retry.job = { ...active }; retry.spentUsd = Math.max(retry.spentUsd, active.aiCostUsd);
   }
   const state = !control.enabled ? 'disabled' : running ? 'running'
     : cooldown ? 'cooldown'
+    : retries.some(retry => retry.status === 'waiting' && retry.reason === 'proxy' && Date.parse(retry.dueAt) > now.getTime()) ? 'proxy'
+    : retries.some(retry => retry.status === 'waiting' && retry.reason === 'request_budget' && Date.parse(retry.dueAt) > now.getTime()) ? 'request_budget'
     : eligible && store.deploymentMaintenanceActive() ? 'maintenance' : eligible && busy ? 'busy'
     : eligible ? 'due' : 'scheduled';
   return {

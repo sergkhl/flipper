@@ -354,9 +354,9 @@ export default function SettingsDrawer({
           </div>
           <p className="section-caption">
             Each refresh scans recent Da Nang listings in the selected category
-            or query. It enriches 30 local ads, verifies descriptions for priced candidates, and compares
+            or query. It enriches 10 initial local ads, verifies descriptions for priced candidates, and compares
             up to 12 distinct configurations, using up to {draft.benchmarkLimit}{" "}
-            nationwide offers per query. Open any listing and choose “Refresh
+            nationwide offers per query, stopping once enough independent matching offers support the comparison. Open any listing and choose “Refresh
             this evidence” for a focused comparison. You can expand the local
             scan from the feed.
           </p>
@@ -375,7 +375,7 @@ export default function SettingsDrawer({
               unit="Focused comparable collection"
               value={draft.benchmarkLimit}
               min={20}
-              max={200}
+              max={60}
               step={20}
               onChange={(value) => update("benchmarkLimit", value)}
             />
@@ -383,9 +383,11 @@ export default function SettingsDrawer({
           <div className="settings-method-note">
             <ShieldCheck size={17} />
             <p>
-              Exact models and essential configurations must match. Laptops use
-              complete laptop comparisons. A desktop component sum is labeled as
-              a partial baseline.
+              Collection shares a limit of 500 marketplace requests per rolling
+              24 hours, with 150 per automatic category and at least 50 reserved
+              for manual work. Requests run one at a time, at least 3 seconds apart.
+              Automatic comparisons use at most two adjustment-part searches per
+              configuration; partial component baselines are retrieved on demand.
             </p>
           </div>
         </section>

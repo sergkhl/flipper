@@ -26,3 +26,14 @@ refine matching. A changed interpretation invalidates affected price references.
 
 No downloaded catalog, marketplace database or listing photograph is distributed
 with this source repository. See `NOTICE.md` for third-party notices.
+
+Marketplace HTTPS routing loads bounded runtime plaintext proxy lists from
+[monosans](https://github.com/monosans/proxy-list) and
+[Proxifly](https://github.com/proxifly/free-proxy-list). Both can contribute
+credential-free public HTTP, HTTPS and SOCKS5 candidates. Lists are untrusted
+discovery inputs; a listed proxy is not proof of availability. HTTPS certificate
+verification remains enabled, and only public marketplace requests use those
+routes. Source cooldowns and the shared 500-attempt rolling allowance apply
+across routes. Unavailable proxies queue work without a direct fallback.
+Catalog downloads, LiteLLM and administrator traffic do not use these proxies.
+Downloaded lists and cached endpoint/health state remain private runtime data.

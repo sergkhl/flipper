@@ -264,6 +264,7 @@ export default function App() {
             setToast({
               text: "Refresh complete. Nationwide evidence is ready to inspect.",
             });
+          else if (result.job.status === "waiting") setToast({ text: result.job.message });
         }
       } catch (error) {
         if (cancelled) return;
@@ -357,6 +358,7 @@ export default function App() {
         includeUnknownMemory,
       });
       setJob(result.job);
+      if (result.job.status === "waiting") setToast({ text: result.job.message });
       setError(null);
     } catch (error) {
       setError(message(error));
@@ -371,6 +373,7 @@ export default function App() {
         `/listings/${encodeURIComponent(id)}/analyze`,
       );
       setJob(result.job);
+      if (result.job.status === "waiting") setToast({ text: result.job.message });
     } catch (error) {
       setToast({ text: message(error) });
       throw error;
@@ -461,8 +464,8 @@ export default function App() {
   const expandedLimit = Math.min(
     1000,
     Math.max(
-      400,
-      (coverage?.limit ?? adminBootstrap?.settings.scanLimit ?? 200) * 2,
+      200,
+      (coverage?.limit ?? adminBootstrap?.settings.scanLimit ?? 100) * 2,
     ),
   );
 

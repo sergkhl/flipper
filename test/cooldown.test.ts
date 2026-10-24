@@ -13,6 +13,7 @@ import { LiteLLMClient, RefreshBudget, BudgetExceededError } from '../server/lit
 import { appServer } from '../server/http.ts';
 import type { Category, RawListing, RefreshJob, SourceCooldown } from '../shared/types.ts';
 import { raw, assessment } from './helpers.ts';
+import { assessWithRules } from '../server/hardware.ts';
 
 const observed = new Date('2026-10-20T06:22:49.481Z');
 const due = new Date('2026-10-21T06:21:51.000Z');
@@ -100,7 +101,8 @@ test('desktop and GPU recoveries survive restart, defer noon and share the due d
   f.service.recoverScanRetry(failed('gpu'), .25, cooldown);
   assert.equal(f.service.recoverScanRetry(failed('desktop', .0185129144), .25, cooldown).id, desktop.id);
   assert.equal(f.store.scanRetries().length, 2);
-  assert.throws(() => f.service.refresh('gpu', ''), SourceCooldownError);
+  assert.equal(f.service.refresh('gpu', '').status, 'waiting');
+  assert.deepEqual(calls, [], 'overlapping refresh returns its queued work without source traffic');
   const reopened = new Store(f.directory), service = new FlipperService(reopened, f.source, undefined, () => due), scanner = new DailyScanner(service);
   try {
     reopened.interruptDailyScans(observed); reopened.interruptScanRetries(observed);
@@ -146,7 +148,10 @@ test('a repeated cooldown carries costs forward and cannot mint another AI allow
   assert.equal(waiting.id, seed.id); assert.equal(waiting.status, 'waiting');
   assert.ok(Math.abs(waiting.spentUsd - .22) < 1e-12); assert.equal(waiting.dueAt, later.until);
   assert.equal(f.scanner.tick(new Date(due.getTime() + 60_000)), null);
-  phase = 1; f.scanner.tick(new Date(later.until)); await complete(f.service);
+  phase = 1;
+  const updated = { ...f.store.getListing('retry-budget')!.raw, price: 4_000_001 };
+  f.store.putListing(updated, assessWithRules(updated), true);
+  f.scanner.tick(new Date(later.until)); await complete(f.service);
   const done = f.store.scanRetries()[0];
   assert.equal(done.status, 'complete'); assert.equal(done.attempts, 2);
   assert.ok(Math.abs(done.spentUsd - .22) < 1e-12);

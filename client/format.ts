@@ -51,7 +51,7 @@ export function timeAgo(value: string | null | undefined): string {
 }
 export function isRunning(job: RefreshJob | null): boolean {
   return Boolean(
-    job && !["complete", "failed", "cancelled"].includes(job.status),
+    job && ["collecting", "assessing", "comparing"].includes(job.status),
   );
 }
 export function safeSourceUrl(url: string): string | undefined {

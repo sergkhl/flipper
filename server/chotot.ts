@@ -1,6 +1,8 @@
 import type { Condition, HardwareKind, RawListing } from '../shared/types.ts';
 import type { SourceCooldown } from '../shared/types.ts';
 import { activeCooldown, retryAfterMs, SourceCooldownError, type CooldownStore } from './source-cooldown.ts';
+import { SourceDeferredError, SOURCE_INTERVAL_MS, type SourceRequestContext, type SourceRequestStore } from './source-policy.ts';
+import type { ProxyPool } from './proxies.ts';
 
 type ObjectValue = Record<string, unknown>;
 type SearchInput = {
@@ -244,14 +246,22 @@ export class ChototClient {
   private cooldown: SourceCooldown | null = null;
   private readonly cooldownStore?: CooldownStore;
   private readonly now: () => Date;
+  private readonly requestStore?: SourceRequestStore;
+  private readonly proxies?: ProxyPool;
+  private context: SourceRequestContext | null = null;
 
-  constructor({ fetch: fetcher = globalThis.fetch, pauseMs = 350, cooldownStore, now = () => new Date() }:
-    { fetch?: typeof fetch; pauseMs?: number; cooldownStore?: CooldownStore; now?: () => Date } = {}) {
+  constructor({ fetch: fetcher = globalThis.fetch, pauseMs = SOURCE_INTERVAL_MS, cooldownStore, now = () => new Date(), requestStore, proxies }:
+    { fetch?: typeof fetch; pauseMs?: number; cooldownStore?: CooldownStore; now?: () => Date; requestStore?: SourceRequestStore; proxies?: ProxyPool } = {}) {
     this.fetcher = fetcher;
-    this.pauseMs = Math.max(0, Number.isFinite(pauseMs) ? pauseMs : 350);
+    this.pauseMs = Math.max(0, Number.isFinite(pauseMs) ? pauseMs : SOURCE_INTERVAL_MS);
     this.cooldownStore = cooldownStore;
     this.now = now;
+    this.requestStore = requestStore; this.proxies = proxies;
   }
+  beginJob(context: SourceRequestContext): void { this.context = context; }
+  endJob(): void { if (this.context) this.proxies?.endJob(this.context.id); this.context = null; }
+  proxyStatus() { return this.proxies?.status() ?? null; }
+  async close(): Promise<void> { await this.proxies?.close(); }
 
   private assertAvailable(): void {
     const cooldown = activeCooldown(this.cooldownStore?.sourceCooldown() ?? this.cooldown, this.now());
@@ -327,13 +337,24 @@ export class ChototClient {
       while (this.nextRequestAt > performance.now()) await wait(this.nextRequestAt - performance.now(), signal);
       signal?.throwIfAborted();
       this.assertAvailable();
+      if (this.requestStore && this.context) {
+        let next: string | null;
+        while ((next = this.requestStore.reserveSourceRequest(this.context.category, this.context.automatic, this.now(), this.pauseMs))) {
+          await wait(Math.max(1, Date.parse(next) - this.now().getTime()), signal);
+          signal?.throwIfAborted(); this.assertAvailable();
+        }
+      }
       return release;
     } catch (error) { release(); throw error; }
   }
 
   private async html(url: string, signal?: AbortSignal): Promise<{ html: string; url: string }> {
+    let redirects = 0;
     for (let attempt = 0; attempt < 3; attempt++) {
       signal?.throwIfAborted();
+      this.assertAvailable();
+      // Discover a route before reserving a destination request. No direct fallback.
+      const proxy = this.proxies ? await this.proxies.uriForJob(this.context?.id ?? 'standalone', signal) : null;
       const release = await this.requestTurn(signal);
       const controller = new AbortController();
       const requestSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
@@ -341,15 +362,25 @@ export class ChototClient {
       let retryDelay = 0;
       try {
         let pendingResponse: Promise<Response>;
-        try {
-          signal?.throwIfAborted();
-          this.nextRequestAt = performance.now() + this.pauseMs;
-          pendingResponse = this.fetcher(url, {
-          signal: requestSignal, redirect: 'follow',
+        signal?.throwIfAborted();
+        this.nextRequestAt = performance.now() + this.pauseMs;
+        this.context?.onRequest();
+        const init: RequestInit = {
+          signal: requestSignal, redirect: 'manual',
           headers: { accept: 'text/html', 'user-agent': 'Mozilla/5.0 (compatible; Flipper/0.1; local public-listing reader)' },
-          });
-        } finally { release(); }
+        };
+        pendingResponse = proxy ? this.proxies!.fetch(proxy, url, init) : this.fetcher(url, init);
         const response = await pendingResponse;
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+          await response.body?.cancel();
+          const location = response.headers.get('location');
+          const next = location ? new URL(location, url) : null;
+          if (!next || next.protocol !== 'https:' || !['www.chotot.com', 'chotot.com'].includes(next.hostname)
+            || next.username || next.password || next.port && next.port !== '443' || ++redirects > 5) {
+            throw new Error('Chợ Tốt redirected the request outside the marketplace or exceeded the redirect limit.');
+          }
+          url = next.href; attempt--; continue;
+        }
         const retryable = response.status === 429 || (response.status >= 500 && response.status <= 599);
         if (retryable) {
           await response.body?.cancel();
@@ -379,11 +410,16 @@ export class ChototClient {
         }
       } catch (error) {
         signal?.throwIfAborted();
-        if (error instanceof SourceCooldownError) throw error;
+        if (error instanceof SourceCooldownError || error instanceof SourceDeferredError) throw error;
+        if (proxy && !(error instanceof Error && /^Chợ Tốt|^This Chợ Tốt/.test(error.message))) {
+          this.proxies!.failed(proxy);
+          if (attempt === 2) this.proxies!.pause();
+          continue;
+        }
         if (controller.signal.aborted) throw new Error('Chợ Tốt request timed out after 15 seconds.');
         if (error instanceof Error && /^Chợ Tốt|^This Chợ Tốt/.test(error.message)) throw error;
         throw new Error('Could not read Chợ Tốt. Check the connection and try refreshing again.');
-      } finally { clearTimeout(timer); }
+      } finally { clearTimeout(timer); release(); }
       await wait(retryDelay, signal);
     }
     throw new Error('Chợ Tốt could not be reached.');

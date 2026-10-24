@@ -194,28 +194,46 @@ one card; explicit bundles and conflicting prices remain in review. Gift values
 are excluded from asking-price checks. Quoted local parsing fills AI omissions
 without inventing specifications. An individual AI failure falls back to local
 rules; three consecutive failures pause AI for the job, and budget exhaustion
-stops further AI calls immediately. Collection and AI budget limits are unchanged.
+stops further AI calls immediately. Resumed work retains its original AI allowance.
 
 ## Collection and persistence
 
-Full market scans start at up to **200 recent local listings**. Coverage and source
+Full market scans default to **100 recent local listings**. Coverage and source
 totals are visible, and **Expand scan** allows up to 1,000. A refresh enriches up
-to 30 promising/unresolved local listings and compares up to 12 distinct eligible
+to ten initial promising/unresolved local listings and compares up to 12 distinct eligible
 configurations. Those bounded detail, AI and comparison steps prioritize known
 matches for all applicable memory minimums, followed by possible matches with
 unknown capacities, then known failures; asking price orders each group.
 The VRAM exemptions are the same as in the feed. Nationwide comparison pools
 retain their configuration matching rules independently of these buying filters.
-Focused national searches collect up to 60 offers per query by
-default; this limit is editable. Computer detail reads prioritize the target's
+National searches collect at most 60 offers per query, stopping pagination and
+detail reads once enough valid independent offers support the comparison.
+Computer detail reads prioritize the target's
 RAM capacity, then unknown capacity, before differing capacities. Each computer
-cohort can query up to 12 distinct required adjustment parts, followed by the
-existing four possible partial-baseline component searches when necessary.
+cohort can query at most two reusable adjustment parts automatically. Manual
+analysis can retrieve deeper adjustments and partial component baselines.
 Pools are reused within the job. Remaining listings explicitly say they have not
 been benchmarked and can be analyzed individually. Additional description checks
 are made for candidates that are about to be priced.
 
-Requests are paced. Nationwide raw pools can be reused for six hours; AI
+All marketplace routes share a persistent **500-request rolling 24-hour limit**,
+including retries, redirects and failures. Automatic work has a 150-request
+category ceiling and a 450-request total ceiling, reserving at least 50 for
+manual analysis. One request runs at a time, at least three seconds between
+starts. Exhausted allowance and unavailable proxies queue unfinished work for
+automatic resumption with its progress and cumulative AI spending intact.
+Overlapping automatic work shares one queue entry and current settings.
+
+Public HTTPS marketplace requests use runtime candidates from
+[monosans](https://github.com/monosans/proxy-list) and
+[Proxifly](https://github.com/proxifly/free-proxy-list). A job retains its proxy;
+connection failures can switch it. A 429 retains the global source cooldown.
+Unavailable proxies pause collection without direct fallback. LiteLLM and admin
+credentials stay outside these routes. Private Settings shows usage and queue
+status. [ADR 0009](docs/adr/0009-marketplace-request-budget-and-proxy-routing.md)
+records the full policy.
+
+Nationwide raw pools and partial progress can be reused for six hours; AI
 assessments are cached by listing content and asking price. Source failures retain
 previous observed results and show the failed refresh. Price changes, favorites,
 dismissals, searches and settings persist in `.data/flipper.sqlite`.

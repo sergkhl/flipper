@@ -20,7 +20,7 @@ const settingsSchema = z.object({
   resaleFactor: z.number().finite().min(.1).max(1.5).optional(),
   costReserves: z.object({ laptop: z.number().finite().min(0).max(1e8).optional(), desktop: z.number().finite().min(0).max(1e8).optional(), gpu: z.number().finite().min(0).max(1e8).optional() }).strict().optional(),
   aiBudgetUsd: z.number().finite().min(0).max(10).optional(), scanLimit: z.number().int().min(20).max(1000).optional(),
-  benchmarkLimit: z.number().int().min(20).max(200).optional(), aiEnabled: z.boolean().optional(),
+  benchmarkLimit: z.number().int().min(20).max(60).optional(), aiEnabled: z.boolean().optional(),
   liteLlmKey: z.string().max(500).optional(),
 }).strict();
 const stateSchema = z.object({ saved: z.boolean().optional(), dismissed: z.boolean().optional(),

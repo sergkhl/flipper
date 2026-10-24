@@ -21,7 +21,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   discountPercent: 10, minComparables: 5, minProfit: 500_000,
   minRoiPercent: 15, resaleFactor: 0.9,
   costReserves: { laptop: 500_000, desktop: 500_000, gpu: 200_000 },
-  aiBudgetUsd: 0.25, scanLimit: 200, benchmarkLimit: 60, aiEnabled: true,
+  aiBudgetUsd: 0.25, scanLimit: 100, benchmarkLimit: 60, aiEnabled: true,
 };
 export const EMPTY_PROFILE: HardwareProfile = {
   model: null, cpu: null, gpu: null, gpuClass: null, vramGb: null,

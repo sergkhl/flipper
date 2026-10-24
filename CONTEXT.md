@@ -74,6 +74,28 @@ A separately advertised graphics card, presented in its own search view.
 The actual GPU model and memory configuration must be distinguished from
 whole-system, accessory, wanted, or multi-model advertisements.
 
+**Marketplace request allowance**:
+At most 500 Chợ Tốt HTTP attempts in a rolling 24 hours, shared by all manual,
+automatic, recovery and proxy routes, including retries and redirects. Automatic
+work can consume at most 150 per category and 450 total. At least 50 are reserved
+for manual work, which can also use the remaining total allowance. One request
+runs at a time, with at least three seconds between starts. The ledger and pacing
+survive restarts.
+
+**Queued marketplace work**:
+A scan or focused analysis waiting for request allowance, a source cooldown or
+a proxy. Its observations, pagination and original AI spending are retained for
+automatic resumption. Overlapping automatic category work shares one queue entry
+with the latest settings; focused manual listings retain separate scopes.
+
+Collection defaults to 100 local listings, ten initial detail reads and at most
+60 national offers per query, stopping once enough valid independent comparisons
+exist. Automatic PC work uses at most two adjustment-part searches per
+configuration; partial component baseline searches run on demand. Public HTTPS
+marketplace traffic uses a stable job proxy from the two configured runtime
+lists, switching only on connection/proxy errors. Unavailable proxies pause work
+without direct fallback; HTTP 429 retains the global source cooldown. See ADR 0009.
+
 **Reference price**:
 A filtered arithmetic mean of matching nationwide used Chợ Tốt asking-price
 offers from independent sellers. At least three offers provide an indicative

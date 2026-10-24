@@ -258,7 +258,7 @@ export interface RefreshJob {
   id: string;
   category: Category;
   query: string;
-  status: 'collecting' | 'assessing' | 'comparing' | 'complete' | 'failed' | 'cancelled';
+  status: 'collecting' | 'assessing' | 'comparing' | 'waiting' | 'complete' | 'failed' | 'cancelled';
   message: string;
   scanned: number;
   target: number;
@@ -272,6 +272,7 @@ export interface RefreshJob {
   completedAt: string | null;
   /** Retry costs include the earlier attempts against the same allowance. */
   retryOf?: string;
+  resumeAt?: string;
 }
 export interface ListingsResponse {
   items: ListingView[];
@@ -289,6 +290,7 @@ export interface AdminBootstrapResponse {
   schedule: DailyScanStatus;
   searches: SavedSearch[];
   counts: Record<Category, number>;
+  marketplace?: MarketplaceStatus;
 }
 export interface PublicBootstrapResponse {
   access: 'read-only';
@@ -319,11 +321,25 @@ export interface ScanRetry {
   dailyDay: string | null;
   job: RefreshJob;
   aiIssue: string | null;
+  reason?: 'cooldown' | 'request_budget' | 'proxy';
+  automatic?: boolean;
+  listingId?: string;
+  progress?: RefreshProgress;
+}
+export interface RefreshProgress {
+  ids: string[];
+  raws?: RawListing[];
+  nextPage: number;
+  collected: boolean;
+  assessedIds: string[];
+  comparedIds: string[];
+  initialDetails: number;
+  truncated?: boolean;
 }
 export interface DailyScanAttempt {
   day: string;
   category: Category;
-  status: 'running' | 'complete' | 'failed' | 'cancelled' | 'interrupted';
+  status: 'running' | 'waiting' | 'complete' | 'failed' | 'cancelled' | 'interrupted';
   budgetUsd: number;
   startedAt: string;
   completedAt: string | null;
@@ -338,9 +354,19 @@ export interface DailyScanStatus {
   perCategoryBudgetUsd: number;
   dailyBudgetUsd: number;
   nextRunAt: string | null;
-  state: 'disabled' | 'scheduled' | 'due' | 'busy' | 'maintenance' | 'running' | 'cooldown';
+  state: 'disabled' | 'scheduled' | 'due' | 'busy' | 'maintenance' | 'running' | 'cooldown' | 'request_budget' | 'proxy';
   lastRunDay: string | null;
   attempts: DailyScanAttempt[];
   cooldown: SourceCooldown | null;
   retries: ScanRetry[];
+  marketplace?: MarketplaceStatus;
+}
+export interface SourceBudgetStatus {
+  limit: number; used: number; automaticUsed: number; manualUsed: number;
+  categoryUsed: Record<Category, number>; remaining: number; automaticCategoryLimit: number;
+  manualReserve: number; nextRequestAt: string | null;
+}
+export interface MarketplaceStatus {
+  requests: SourceBudgetStatus;
+  proxies: { enabled: boolean; sources: string[]; cached: number; available: number; fetchedAt: string | null; retryAt: string | null } | null;
 }

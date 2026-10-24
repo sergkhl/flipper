@@ -14,6 +14,8 @@ const states = {
   due: 'Daily scan is due', busy: 'Waiting for the current job or AI test',
   maintenance: 'Waiting for deployment to finish', running: 'Daily scan in progress',
   cooldown: 'Chợ Tốt requests are paused for a source cooldown',
+  request_budget: 'Queued work is waiting for marketplace request allowance',
+  proxy: 'Queued work is waiting for a working proxy',
 };
 
 export default function DailyScans({ initial }: { initial: DailyScanStatus }) {
@@ -55,7 +57,7 @@ export default function DailyScans({ initial }: { initial: DailyScanStatus }) {
     {schedule.cooldown && <p className="section-caption" role="status">Chợ Tốt requests resume no earlier than <strong>{vietnamTime(schedule.cooldown.until)}</strong>.
       Daily work waits without consuming an attempt. The noon schedule stays in place.</p>}
     {schedule.retries.length > 0 && <div className="daily-scan-history">
-      <h4>Cooldown recovery</h4>
+      <h4>Queued work and recovery</h4>
       <ul>{schedule.retries.map(retry => <li key={retry.id}>
         <div><strong>{categoryLabels[retry.category]}</strong><span className="badge">{retry.status}</span></div>
         <p>{retry.status === 'waiting' ? `Automatic retry after ${vietnamTime(schedule.cooldown && schedule.cooldown.until > retry.dueAt ? schedule.cooldown.until : retry.dueAt)}.` : retry.job.message}
@@ -78,8 +80,13 @@ export default function DailyScans({ initial }: { initial: DailyScanStatus }) {
         </li>;
       })}</ul>
     </div>}
-    <p className="section-caption">Source cooldown failures retry after the advertised wait. Other failures and interrupted jobs are not automatically repeated.
-      After downtime, only today's missed daily work and explicitly queued cooldown recoveries can resume.</p>
+    {schedule.marketplace && <p className="section-caption">
+      Marketplace requests: {schedule.marketplace.requests.used} / {schedule.marketplace.requests.limit} in the last 24 hours.
+      Automatic work allows up to {schedule.marketplace.requests.automaticCategoryLimit} per category; at least {schedule.marketplace.requests.manualReserve} total are reserved for manual analysis.
+      {schedule.marketplace.proxies && ` Proxy routing: ${schedule.marketplace.proxies.available} cached candidates available. Direct fallback is disabled.`}
+    </p>}
+    <p className="section-caption">Source cooldowns, request limits and unavailable proxies queue work for automatic recovery. Other failures and interrupted jobs are not automatically repeated.
+      After downtime, today's missed daily work and previously queued work can resume.</p>
     {error && <p className="error-text" role="alert">{error}</p>}
   </section>;
 }

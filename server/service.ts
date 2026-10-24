@@ -5,24 +5,27 @@ import { ChototClient } from './chotot.ts';
 import { enrichComputerAssessment, expandPricedConfigurations } from './computer.ts';
 import { assessWithRules, cpuModels, gpuModels, normalize, profileKey, sourceUnavailable } from './hardware.ts';
 import { BudgetExceededError, LiteLLMClient, RefreshBudget } from './litellm.ts';
-import { adjustmentRequirements, buildReference, type AssessedListing, valueListing } from './pricing.ts';
-import { EMPTY_STATE, Store, type StoredListing } from './store.ts';
+import { adjustmentRequirements, buildReference, filterComparableOffers, type AssessedListing, valueListing } from './pricing.ts';
+import { EMPTY_STATE, Store, assessmentHash, type StoredListing } from './store.ts';
 import type { LaptopSpecRequest, MemoryPartRequest, MemoryTypeLookup } from './techapi.ts';
 import { laptopSpecRequest } from './laptop-specs.ts';
 import { dailyScanStatus } from './scheduler.ts';
 import type { ScanRetry, SourceCooldown } from '../shared/types.ts';
 import { activeCooldown, SourceCooldownError } from './source-cooldown.ts';
 import { reconcileAssessment } from './assessment.ts';
+import { ProxyPool } from './proxies.ts';
+import { AUTOMATIC_PART_SEARCHES, LOCAL_DETAIL_LIMIT, NATIONAL_OFFER_LIMIT, SourceDeferredError } from './source-policy.ts';
+import type { RefreshProgress } from '../shared/types.ts';
 
 const POOL_AGE_MS = 6 * 60 * 60 * 1000;
 const AUTO_COHORTS = 12;
 const COMPONENT_SEARCHES_PER_COHORT = 12;
 const MAX_CONSECUTIVE_AI_FAILURES = 3;
-type Source = Pick<ChototClient, 'search' | 'detail'>;
+type Source = Pick<ChototClient, 'search' | 'detail'> & Partial<Pick<ChototClient, 'beginJob' | 'endJob' | 'proxyStatus' | 'close'>>;
 type MemoryCatalog = MemoryTypeLookup & { warm?(parts: MemoryPartRequest[], signal?: AbortSignal): Promise<void>;
   warmLaptops?(parts: LaptopSpecRequest[], signal?: AbortSignal): Promise<void> };
 interface MemoryFilters { minRamGb: number; minVramGb: number; includeUnknownMemory: boolean; }
-interface JobContext { job: RefreshJob; abort: AbortController; budget: RefreshBudget; settings: AppSettings; ai: LiteLLMClient | null; aiStopped: boolean; aiFailures: number; memory: MemoryFilters; pools: Map<string, AssessedListing[]>; scheduledDay?: string; retryId?: string; }
+interface JobContext { job: RefreshJob; abort: AbortController; budget: RefreshBudget; settings: AppSettings; ai: LiteLLMClient | null; aiStopped: boolean; aiFailures: number; memory: MemoryFilters; pools: Map<string, AssessedListing[]>; automatic: boolean; progress: RefreshProgress; listingId?: string; scheduledDay?: string; retryId?: string; }
 
 function applicableMemory(category: Category, profile: HardwareProfile, filters: MemoryFilters): Array<{ capacity: number | null; minimum: number }> {
   const fields = category === 'gpu' ? [] : [{ capacity: profile.ramGb, minimum: filters.minRamGb }];
@@ -77,6 +80,7 @@ function onlyUnknownMemoryNeedsReview(item: ListingView, reference: ReferencePri
 }
 
 export class FlipperService {
+  private source: Source;
   private jobs = new Map<string, RefreshJob>();
   private active: JobContext | null = null;
   private aiProbeRunning = false;
@@ -85,8 +89,11 @@ export class FlipperService {
   private stopping = false;
   private pending = new Set<Promise<unknown>>();
   private probeAbort: AbortController | null = null;
-  constructor(readonly store: Store, private source: Source = new ChototClient({ cooldownStore: store }), private memoryCatalog?: MemoryCatalog,
-    private now: () => Date = () => new Date()) {}
+  constructor(readonly store: Store, source?: Source, private memoryCatalog?: MemoryCatalog,
+    private now: () => Date = () => new Date()) {
+    this.source = source ?? new ChototClient({ cooldownStore: store, requestStore: store, proxies: new ProxyPool(store) });
+  }
+  private countRequest(context: JobContext): void { if (!this.source.beginJob) context.job.requestCount++; }
 
   private memoryAssessment(raw: RawListing, assessment: Assessment): Assessment {
     return enrichComputerAssessment(raw, reconcileAssessment(raw, assessment), this.memoryCatalog);
@@ -116,8 +123,9 @@ export class FlipperService {
       status: !settings.aiEnabled ? 'disabled' : !configured ? 'not_configured' : this.aiError ? 'error' : this.budgetLimited ? 'budget_limited' : 'ready',
       lastError: this.aiError, totalCostUsd: this.store.totalCost() };
   }
-  bootstrap(): AdminBootstrapResponse { return { access: 'admin', settings: this.store.getSettings(), ai: this.aiStatus(), schedule: this.scheduleStatus(), searches: this.store.searches(), counts: this.store.counts() }; }
-  scheduleStatus(now = this.now()) { return dailyScanStatus(this.store, this.activeJob(), this.deploymentStatus().busy, now); }
+  private marketplaceStatus() { return { requests: this.store.sourceBudgetStatus(this.now()), proxies: this.source.proxyStatus?.() ?? null }; }
+  bootstrap(): AdminBootstrapResponse { return { access: 'admin', settings: this.store.getSettings(), ai: this.aiStatus(), schedule: this.scheduleStatus(), searches: this.store.searches(), counts: this.store.counts(), marketplace: this.marketplaceStatus() }; }
+  scheduleStatus(now = this.now()) { return { ...dailyScanStatus(this.store, this.activeJob(), this.deploymentStatus().busy, now), marketplace: this.marketplaceStatus() }; }
   configureDailyScans(enabled: boolean, now = this.now()) {
     this.ensureWorkAllowed(); this.store.configureDailyScans(enabled, now); return this.scheduleStatus(now);
   }
@@ -232,7 +240,11 @@ export class FlipperService {
   }
   activeJob(): RefreshJob | null { return this.active?.job ?? null; }
   deploymentStatus(): { busy: boolean } { return { busy: !!this.active || this.aiProbeRunning }; }
-  getJob(id: string): RefreshJob | null { return this.jobs.get(id) ?? null; }
+  getJob(id: string): RefreshJob | null {
+    const queued = this.store.scanRetries().find(retry => retry.originalJobId === id || retry.job.id === id);
+    return queued && queued.status !== 'running' ? queued.status === 'waiting'
+      ? { ...queued.job, status: 'waiting', resumeAt: queued.dueAt } : queued.job : this.jobs.get(id) ?? queued?.job ?? null;
+  }
   cancelJob(id: string): RefreshJob | null {
     if (this.active?.job.id === id) { this.active.abort.abort(); this.active.job.message = 'Cancelling after the current request'; }
     return this.jobs.get(id) ?? null;
@@ -251,6 +263,7 @@ export class FlipperService {
     this.stopping = true;
     this.active?.abort.abort(); this.probeAbort?.abort();
     await Promise.allSettled([...this.pending]);
+    await this.source.close?.();
   }
   testAI(): Promise<Array<{ model: string; ok: boolean; error?: string; costUsd?: number }>> {
     // Register synchronous exclusion before launching the asynchronous request.
@@ -271,22 +284,28 @@ export class FlipperService {
     } finally { this.aiProbeRunning = false; this.probeAbort = null; }
   }
   refresh(category: Category, query: string, limit?: number, minRamGb?: number, minVramGb?: number, includeUnknownMemory?: boolean): RefreshJob {
+    this.ensureWorkAllowed();
+    const queued = this.store.pendingScanRetry(category, normalize(query));
+    if (queued?.status === 'waiting') return { ...queued.job, status: 'waiting', resumeAt: queued.dueAt };
     const context = this.startJob(category, query, limit, { minRamGb, minVramGb, includeUnknownMemory });
     this.launchRefresh(context); return context.job;
   }
   analyze(id: string): RefreshJob {
     this.ensureWorkAllowed();
     const listing = this.store.getListing(id); if (!listing || !['laptop','desktop','gpu'].includes(listing.raw.category)) throw new Error('Listing not found');
-    const context = this.startJob(listing.raw.category as Category, '', 1);
+    const queued = this.store.pendingScanRetry(listing.raw.category as Category, '', id);
+    if (queued?.status === 'waiting') return { ...queued.job, status: 'waiting', resumeAt: queued.dueAt };
+    const context = this.startJob(listing.raw.category as Category, '', 1, {}, id);
+    context.listingId = id;
     context.job.message = 'Retrieving this listing and focused nationwide comparisons';
     void this.track(this.runFocused(context, listing)); return context.job;
   }
-  private startJob(category: Category, query: string, limit?: number, memory: Partial<MemoryFilters> = {}): JobContext {
+  private startJob(category: Category, query: string, limit?: number, memory: Partial<MemoryFilters> = {}, listingId?: string): JobContext {
     this.ensureWorkAllowed();
     if (this.active) throw new Error('A refresh is already running. Wait for it or cancel it first.');
     if (this.aiProbeRunning) throw new Error('Wait for the active AI probe before starting a refresh or analysis');
     this.ensureSourceAvailable();
-    if (this.store.pendingScanRetry(category, normalize(query))) throw new Error('A refresh retry is already queued for this category and search');
+    if (this.store.pendingScanRetry(category, normalize(query), listingId)) throw new Error('A refresh retry is already queued for this category and search');
     const settings = this.store.getSettings();
     return this.createJob(category, query, settings, limit, memory);
   }
@@ -297,16 +316,22 @@ export class FlipperService {
     const recovery = this.store.claimScanRetry(now);
     if (recovery) {
       const { retry, settings } = recovery;
-      const context = this.createJob(retry.category, retry.query, settings, retry.job.target, {}, now, retry);
+      const context = this.createJob(retry.category, retry.query, settings, retry.job.target, {}, now, retry, retry.automatic ?? retry.dailyDay !== null);
       context.retryId = retry.id;
+      context.listingId = retry.listingId;
       if (retry.dailyDay) context.scheduledDay = retry.dailyDay;
       this.store.recordScanRetry(retry.id, context.job, null);
       if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, context.job);
-      this.launchRefresh(context); return context.job;
+      if (retry.listingId) {
+        const listing = this.store.getListing(retry.listingId);
+        if (listing) void this.track(this.runFocused(context, listing));
+        else { context.job.status = 'failed'; context.job.error = 'Queued listing is no longer retained'; this.finish(context); }
+      } else this.launchRefresh(context);
+      return context.job;
     }
     const claim = this.store.claimDailyScan(this.store.getSettings(), now);
     if (!claim) return null;
-    const context = this.createJob(claim.attempt.category, '', claim.settings, undefined, {}, now);
+    const context = this.createJob(claim.attempt.category, '', claim.settings, undefined, {}, now, undefined, true);
     context.scheduledDay = claim.attempt.day;
     this.store.recordDailyScan(context.scheduledDay, context.job);
     this.launchRefresh(context);
@@ -320,9 +345,10 @@ export class FlipperService {
     });
   }
   private createJob(category: Category, query: string, settings: AppSettings, limit?: number,
-    memory: Partial<MemoryFilters> = {}, now = this.now(), retry?: ScanRetry): JobContext {
+    memory: Partial<MemoryFilters> = {}, now = this.now(), retry?: ScanRetry, automatic = false): JobContext {
+    settings = { ...settings, benchmarkLimit: Math.min(settings.benchmarkLimit, NATIONAL_OFFER_LIMIT) };
     const job: RefreshJob = { id: randomUUID(), category, query: normalize(query), status: 'collecting', message: 'Collecting live Da Nang listings',
-      scanned: 0, target: limit ?? settings.scanLimit, assessed: 0, benchmarked: 0, totalAvailable: null, requestCount: 0, aiCostUsd: retry?.spentUsd ?? 0,
+      scanned: 0, target: limit ?? settings.scanLimit, assessed: 0, benchmarked: 0, totalAvailable: retry?.job.totalAvailable ?? null, requestCount: retry?.job.requestCount ?? 0, aiCostUsd: retry?.spentUsd ?? 0,
       error: null, startedAt: now.toISOString(), completedAt: null, ...(retry ? { retryOf: retry.originalJobId } : {}) };
     const key = settings.aiEnabled ? this.store.getKey() : '';
     const context: JobContext = { job, abort: new AbortController(), budget: new RefreshBudget(settings.aiBudgetUsd, retry?.spentUsd), settings,
@@ -332,7 +358,9 @@ export class FlipperService {
         this.store.addReceipt(receipt); job.aiCostUsd = context.budget.spent;
         if (context.retryId) this.store.recordScanRetry(context.retryId, job, this.aiError);
         if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, job);
-      } }) : null, aiStopped: false, aiFailures: 0 };
+      } }) : null, aiStopped: false, aiFailures: 0, automatic,
+      progress: retry?.progress ? structuredClone(retry.progress) : { ids: [], nextPage: 1, collected: false, assessedIds: [], comparedIds: [], initialDetails: 0 } };
+    this.source.beginJob?.({ id: job.id, category, automatic, onRequest: () => { job.requestCount++; } });
     this.clearAIStatus(); this.active = context; this.jobs.set(job.id, job);
     if (this.jobs.size > 50) this.jobs.delete(this.jobs.keys().next().value!);
     return context;
@@ -382,64 +410,87 @@ export class FlipperService {
         images: previous.images.length ? previous.images : raw.images, sellerType: previous.sellerType };
     }
     try {
-      context.job.requestCount++;
+      this.countRequest(context);
       const detail = await this.source.detail(raw, context.abort.signal);
       detail.attributes._detailedAt = new Date().toISOString(); return detail;
     } catch (error) {
       if (context.abort.signal.aborted) throw error;
-      if (error instanceof SourceCooldownError) throw error;
+      if (error instanceof SourceCooldownError || error instanceof SourceDeferredError) throw error;
       // A vanished listing is retained in history and cannot be presented as a fresh eligible candidate.
       if (/404|410/.test(error instanceof Error ? error.message : '')) return { ...raw, condition: 'unknown', attributes: { ...raw.attributes, _sourceUnavailable: true } };
       return { ...raw, attributes: { ...raw.attributes, _detailError: error instanceof Error ? error.message : 'Detail request failed' } };
     }
   }
   private async runRefresh(context: JobContext): Promise<void> {
-    const { job } = context; const gathered = new Map<string, RawListing>();
+    const { job } = context;
+    if (context.progress.raws?.some(raw => Date.now() - Date.parse(raw.observedAt) >= 24 * 60 * 60_000)) {
+      context.progress = { ids: [], nextPage: 1, collected: false, assessedIds: [], comparedIds: [], initialDetails: 0 };
+    }
+    const progress = context.progress;
+    const gathered = new Map<string, RawListing>((progress.raws ?? []).map(raw => [raw.id, raw]));
+    for (const id of progress.assessedIds) {
+      const stored = this.store.getListing(id), snapshot = gathered.get(id);
+      if (stored && snapshot && assessmentHash(stored.raw) !== assessmentHash(snapshot)) {
+        gathered.set(id, stored.raw);
+        progress.assessedIds = progress.assessedIds.filter(item => item !== id);
+        progress.comparedIds = progress.comparedIds.filter(item => item !== id);
+      }
+    }
+    job.scanned = gathered.size; job.assessed = progress.assessedIds.length; job.benchmarked = progress.comparedIds.length;
     try {
-      let page = 1;
-      while (gathered.size < job.target) {
-        context.abort.signal.throwIfAborted(); job.requestCount++;
+      let page = progress.nextPage;
+      while (!progress.collected && gathered.size < job.target) {
+        context.abort.signal.throwIfAborted(); this.countRequest(context);
         const result = await this.source.search({ kind: job.category, location: 'danang', query: job.query, page, signal: context.abort.signal });
         job.totalAvailable = result.total; let added = 0;
         for (const raw of result.items) if (!gathered.has(raw.id) && gathered.size < job.target) { gathered.set(raw.id, raw); added++; }
         job.scanned = gathered.size; job.message = `Collected ${job.scanned} of up to ${job.target} local listings`;
         // Normalization can discard ads from a 20-ad source page; its usable length is not the source-page length.
-        if (!added || (result.total !== null ? page * 20 >= result.total : result.items.length < 20)) break;
+        progress.ids = [...gathered.keys()]; progress.raws = [...gathered.values()]; progress.nextPage = page + 1;
+        if (!added || (result.total !== null ? page * 20 >= result.total : result.items.length < 20)) { progress.collected = true; break; }
         page++;
       }
+      progress.collected = true;
       job.status = 'assessing'; job.message = 'Checking listing types, condition and hardware specifications';
       // Spend bounded detail/AI work on known memory matches, then possible
       // matches with missing capacities, then known failures, ordered by price.
       const ordered = [...gathered.values()].map((raw) => ({ raw,
         priority: memoryPriority(job.category, this.memoryAssessment(raw, this.store.cachedAssessment(raw) ?? assessWithRules(raw)).profile, context.memory) }))
         .sort((a,b) => a.priority-b.priority || a.raw.price-b.raw.price).map(({ raw }) => raw);
-      let detailCount = 0;
       for (let raw of ordered) {
+        if (progress.assessedIds.includes(raw.id)) continue;
         const rules = assessWithRules(raw);
-        if (!sourceUnavailable(raw) && rules.eligibility !== 'excluded' && detailCount < 30) { raw = await this.enriched(raw, context); detailCount++; }
+        if (!sourceUnavailable(raw) && rules.eligibility !== 'excluded' && progress.initialDetails < LOCAL_DETAIL_LIMIT) {
+          raw = await this.enriched(raw, context); progress.initialDetails++;
+        }
         const assessment = await this.assessed(raw, context);
         this.store.putListing(raw, assessment, true); job.assessed++;
+        gathered.set(raw.id, raw); progress.raws = [...gathered.values()]; progress.assessedIds.push(raw.id);
       }
       await this.warmMemory([...gathered.keys()].map(id => this.store.getListing(id)!.raw), context.abort.signal);
       job.status = 'comparing';
       const groups = new Map<string, StoredListing[]>();
+      const completedConfigurations = new Set<string>();
       for (const listing of [...gathered.keys()].map(id => this.prepared(this.store.getListing(id)!)).sort((a,b) =>
         memoryPriority(job.category, a.assessment.profile, context.memory) - memoryPriority(job.category, b.assessment.profile, context.memory)
         || a.raw.price-b.raw.price)) {
         if (listing.assessment.eligibility !== 'eligible' || sourceUnavailable(listing.raw)) continue;
         const c = listing.assessment.computer;
         const key = `${profileKey(listing.assessment.profile, listing.assessment.kind)}:${JSON.stringify([c?.formFactor, c?.cpuCount, c?.ramEcc, c?.ramReplaceable, c?.storageReplaceable])}`;
-        groups.set(key, [...(groups.get(key) ?? []), listing]);
+        if (progress.comparedIds.includes(listing.raw.id)) completedConfigurations.add(key);
+        else groups.set(key, [...(groups.get(key) ?? []), listing]);
       }
-      let count = 0;
-      for (const members of groups.values()) {
-        if (count >= AUTO_COHORTS) {
+      let count = completedConfigurations.size;
+      for (const [key, members] of groups) {
+        if (count >= AUTO_COHORTS && !completedConfigurations.has(key)) {
           for (const listing of members) if (!listing.reference) this.store.setReference(listing.raw.id, null,
             'Not benchmarked in this bounded refresh. Open the listing and choose Analyze to retrieve its focused nationwide comparisons.');
           continue;
         }
-        job.message = `Comparing hardware configuration ${++count} of ${Math.min(groups.size, AUTO_COHORTS)} nationwide`;
+        if (!completedConfigurations.has(key)) count++;
+        job.message = `Comparing hardware configuration ${count} of ${Math.min(groups.size + completedConfigurations.size, AUTO_COHORTS)} nationwide`;
         await this.benchmark(members, context);
+        progress.comparedIds.push(...members.map(member => member.raw.id));
       }
       job.status = 'complete'; job.message = `Collected ${job.scanned} local listings; compared ${job.benchmarked} listings across ${count} configurations. Analyze any remaining listing individually.`;
       // Publish membership only after the full refresh succeeds. Failed or
@@ -452,10 +503,13 @@ export class FlipperService {
   }
   private async runFocused(context: JobContext, listing: StoredListing): Promise<void> {
     try {
-      const raw = await this.enriched(listing.raw, context, true); context.job.scanned = 1;
+      const canResume = context.progress.assessedIds.includes(listing.raw.id)
+        && Date.now() - Date.parse(listing.raw.observedAt) < 24 * 60 * 60_000;
+      const raw = canResume ? listing.raw : await this.enriched(listing.raw, context, true); context.job.scanned = 1;
       await this.warmMemory([raw], context.abort.signal);
       context.job.status = 'assessing'; const assessment = await this.assessed(raw, context);
       const updated = this.store.putListing(raw, assessment, listing.local); context.job.assessed = 1;
+      context.progress.raws = [raw]; context.progress.assessedIds = [raw.id];
       if (assessment.eligibility === 'eligible') {
         context.job.status = 'comparing'; context.job.message = 'Retrieving focused nationwide price evidence';
         await this.benchmark([updated], context);
@@ -470,10 +524,18 @@ export class FlipperService {
     job.status = cancelled ? 'cancelled' : 'failed';
     job.error = cancelled ? null : error instanceof Error ? error.message : 'Marketplace refresh failed';
     job.message = cancelled ? 'Refresh cancelled; retained previously observed results' : 'Refresh failed; retained timestamped results';
-    if (!cancelled && coverage && error instanceof SourceCooldownError) {
+    if (!cancelled && error instanceof SourceDeferredError) {
+      job.status = 'waiting'; job.error = null; job.resumeAt = error.until; job.aiCostUsd = context.budget.spent;
+      job.message = error.message;
+      const retry = this.store.deferScanRetry(job, { ...context.settings, ...context.memory }, { until: error.until }, context.scheduledDay ?? null,
+        context.retryId, { reason: error.reason, automatic: context.automatic, listingId: context.listingId, progress: context.progress });
+      context.retryId = retry.id; return;
+    }
+    if (!cancelled && (coverage || context.listingId) && error instanceof SourceCooldownError) {
       job.aiCostUsd = context.budget.spent;
       const cooldown = this.store.recordSourceCooldown(error.cooldown);
-      const retry = this.store.deferScanRetry(job, { ...context.settings, ...context.memory }, cooldown, context.scheduledDay ?? null, context.retryId);
+      const retry = this.store.deferScanRetry(job, { ...context.settings, ...context.memory }, cooldown, context.scheduledDay ?? null, context.retryId,
+        { reason: 'cooldown', automatic: context.automatic, listingId: context.listingId, progress: context.progress });
       context.retryId = retry.id;
       job.message = `Refresh deferred by Chợ Tốt; automatic retry after ${cooldown.until} within the original AI allowance`;
     }
@@ -488,6 +550,7 @@ export class FlipperService {
     if (context.retryId) this.store.recordScanRetry(context.retryId, context.job, aiIssue);
     if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, context.job, aiIssue);
     if (this.active === context) this.active = null;
+    this.source.endJob?.();
   }
   private searchQuery(kind: HardwareKind, listing: StoredListing): string {
     const p = listing.assessment.profile;
@@ -504,49 +567,63 @@ export class FlipperService {
     }
     return kind === 'laptop' ? p.model ?? '' : p.cpu ?? '';
   }
-  private async collectPool(kind: HardwareKind, query: string, target: StoredListing, context: JobContext): Promise<AssessedListing[]> {
-    const key = `verified-description-v2:${kind}:${normalize(query)}:${context.settings.benchmarkLimit}`;
-    const collected = context.pools.get(key); if (collected) return collected;
-    let raws = this.store.getPool(key, POOL_AGE_MS);
-    if (!raws) {
-      const results = new Map<string, RawListing>(); let page = 1;
-      while (results.size < context.settings.benchmarkLimit) {
-        context.abort.signal.throwIfAborted(); context.job.requestCount++;
-        const result = await this.source.search({ kind, location: 'nationwide', query, page, signal: context.abort.signal });
-        let added = 0;
-        for (const raw of result.items) if (!results.has(raw.id) && results.size < context.settings.benchmarkLimit) { results.set(raw.id, raw); added++; }
-        if (!added || (result.total !== null ? page * 20 >= result.total : result.items.length < 20)) break;
-        page++;
+  private async collectPool(kind: HardwareKind, query: string, target: StoredListing, context: JobContext,
+    reserveBaseSeller = false): Promise<AssessedListing[]> {
+    const limit = Math.min(context.settings.benchmarkLimit, NATIONAL_OFFER_LIMIT);
+    const key = `incremental-v3:${kind}:${normalize(query)}:${limit}`;
+    const required = Math.max(5, context.settings.minComparables) + (reserveBaseSeller ? 1 : 0);
+    const enough = (pool: AssessedListing[]) => kind === 'desktop' || kind === 'laptop'
+      ? (buildReference(target.raw, target.assessment, pool, context.settings).reference?.sampleCount ?? 0) >= required
+      : filterComparableOffers(target.raw, target.assessment.profile, kind, pool).accepted.length >= required;
+    const collected = context.pools.get(key); if (collected && enough(collected)) return collected;
+    const cached = this.store.getPool(key, POOL_AGE_MS);
+    const progress = this.store.poolProgress(key, POOL_AGE_MS)
+      ?? { raws: cached ?? [], nextPage: cached ? Math.ceil(cached.length / 20) + 1 : 1, exhausted: !!cached, detailedIds: [] };
+    const assessed = new Map<string, { hash: string; assessment: Assessment }>();
+    let pool: AssessedListing[] = [];
+    while (true) {
+      context.abort.signal.throwIfAborted();
+      pool = [];
+      for (const raw of progress.raws) {
+        const hash = assessmentHash(raw), existing = assessed.get(raw.id);
+        const assessment = existing?.hash === hash ? existing.assessment : await this.assessed(raw, context);
+        assessed.set(raw.id, { hash, assessment });
+        if (!this.store.getListing(raw.id)?.local) this.store.putListing(raw, assessment, false);
+        pool.push({ raw, assessment });
       }
-      raws = [...results.values()];
-      // Spend the bounded computer detail reads on the closest known RAM capacity first.
-      const detailOrder = raws.map((raw, index) => ({ index, assessment: this.memoryAssessment(raw, assessWithRules(raw)) }));
-      if (kind === 'desktop' || kind === 'laptop') {
-        const ram = target.assessment.profile.ramGb;
-        const rank = (value: number | null) => value === ram ? 0 : value === null ? 1 : 2;
-        detailOrder.sort((a, b) => rank(a.assessment.profile.ramGb) - rank(b.assessment.profile.ramGb));
-      }
-      // Detail is fetched only for plausible model offers, bounded to 20 per focused pool.
-      let details = 0;
-      for (const { index: i, assessment: a } of detailOrder) {
-        const raw = raws[i]!, p = target.assessment.profile;
+      if (enough(pool)) break;
+      const canCollect = !progress.exhausted && progress.raws.length < limit;
+      const ram = target.assessment.profile.ramGb;
+      const rank = (value: number | null) => value === ram ? 0 : value === null ? 1 : 2;
+      const computer = kind === 'desktop' || kind === 'laptop';
+      const candidates = pool.map((item, index) => ({ ...item, index })).filter(({ raw, assessment: a }) => {
+        const p = target.assessment.profile;
         const plausible = kind === 'gpu' ? !a.profile.gpu || a.profile.gpu === p.gpu
           : kind === 'cpu' || kind === 'desktop' ? !a.profile.cpu || a.profile.cpu === p.cpu : a.eligibility !== 'excluded';
-        if (raw.id !== target.raw.id && !sourceUnavailable(raw) && plausible && a.eligibility !== 'excluded' && details < 20
-          && (!raw.description.trim() || a.eligibility === 'review')) {
-          raws[i] = await this.enriched(raw, context); details++;
-        }
+        return raw.id !== target.raw.id && !progress.detailedIds.includes(raw.id) && !sourceUnavailable(raw)
+          && plausible && a.eligibility !== 'excluded' && (!raw.description.trim() || a.eligibility === 'review')
+          && (!computer || !canCollect || rank(a.profile.ramGb) < 2);
+      }).sort((a, b) => computer ? rank(a.assessment.profile.ramGb) - rank(b.assessment.profile.ramGb) : 0);
+      if (candidates.length && progress.detailedIds.length < 20) {
+        const next = candidates[0]!;
+        progress.raws[next.index] = await this.enriched(next.raw, context);
+        progress.detailedIds.push(next.raw.id);
+        this.store.savePoolProgress(key, progress); continue;
       }
-      this.store.putPool(key, raws);
+      if (!canCollect) break;
+      this.countRequest(context);
+      const page = progress.nextPage;
+      const result = await this.source.search({ kind, location: 'nationwide', query, page, signal: context.abort.signal });
+      const ids = new Set(progress.raws.map(raw => raw.id)); let added = 0;
+      for (const raw of result.items) if (!ids.has(raw.id) && progress.raws.length < limit) {
+        ids.add(raw.id); progress.raws.push(raw); added++;
+      }
+      progress.nextPage++;
+      progress.exhausted = !added || (result.total !== null ? page * 20 >= result.total : result.items.length < 20);
+      this.store.savePoolProgress(key, progress);
+      await this.warmMemory(progress.raws, context.abort.signal);
     }
-    await this.warmMemory(raws, context.abort.signal);
-    const pool: AssessedListing[] = [];
-    for (const raw of raws) {
-      const assessment = await this.assessed(raw, context);
-      // Cache national observations too; saved local rows retain their local marker.
-      if (!this.store.getListing(raw.id)?.local) this.store.putListing(raw, assessment, false);
-      pool.push({ raw, assessment });
-    }
+    this.store.putPool(key, progress.raws);
     context.pools.set(key, pool); return pool;
   }
   private async benchmark(members: StoredListing[], context: JobContext): Promise<void> {
@@ -581,13 +658,14 @@ export class FlipperService {
         }
       }
       // Collect the most reusable required parts first; unsupported adjustments remain unpriced.
-      for (const request of [...requests.values()].sort((a,b) => b.uses-a.uses).slice(0, COMPONENT_SEARCHES_PER_COHORT)) {
+      for (const request of [...requests.values()].sort((a,b) => b.uses-a.uses)
+        .slice(0, context.automatic ? AUTOMATIC_PART_SEARCHES : COMPONENT_SEARCHES_PER_COHORT)) {
         const searchTarget = { ...target, assessment: { ...target.assessment, profile: request.profile } };
-        const pool = await this.collectPool(request.kind, request.query, searchTarget, context);
+        const pool = await this.collectPool(request.kind, request.query, searchTarget, context, true);
         components[request.kind] = [...(components[request.kind] ?? []), ...pool];
       }
     }
-    if (kind === 'desktop' && !buildReference(target.raw, target.assessment, peers, context.settings, components).reference) {
+    if (!context.automatic && kind === 'desktop' && !buildReference(target.raw, target.assessment, peers, context.settings, components).reference) {
       const p = target.assessment.profile;
       for (const component of ['gpu','ram','cpu','ssd'] as const) {
         if (component === 'gpu' && (!p.gpu || !p.vramGb || p.gpuClass !== 'desktop')) continue;

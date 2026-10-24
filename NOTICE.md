@@ -13,6 +13,14 @@ Flipper retains attribution, source links, license metadata and catalog dates
 in its cache files and in the specification evidence shown by the application.
 These datasets are not relicensed under the application's MIT license.
 
+Runtime plaintext proxy lists are fetched from
+[monosans/proxy-list](https://github.com/monosans/proxy-list), whose plaintext
+lists use its [MIT license](https://github.com/monosans/proxy-list/blob/main/LICENSE),
+and [proxifly/free-proxy-list](https://github.com/proxifly/free-proxy-list), whose
+repository provides a [GPL-3.0 license](https://github.com/proxifly/free-proxy-list/blob/main/LICENSE).
+No proxy lists or provider implementation code are vendored or distributed with
+Flipper. These external runtime sources retain their own licensing boundaries.
+
 Marketplace descriptions, listing photographs, seller claims and manufacturer
 specifications belong to their respective owners. Fetching or displaying them
 does not make them part of the MIT-licensed application. No runtime marketplace
