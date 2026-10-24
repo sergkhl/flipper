@@ -304,6 +304,12 @@ export interface RunsResponse {
   limits: RunLimits;
   marketplace: MarketplaceStatus;
 }
+/** Private, replaceable snapshot. Reconnecting clients always receive current state. */
+export interface RunActivity {
+  runs: RunsResponse;
+  schedule: DailyScanStatus;
+  job: RefreshJob | null;
+}
 export interface ListingsResponse {
   items: ListingView[];
   total: number;

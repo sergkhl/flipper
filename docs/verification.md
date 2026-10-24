@@ -83,6 +83,24 @@ background updates retain displayed cards; a loading error offers Retry without
 claiming that the market is empty. Measure cold listing responses and first-card
 rendering against the same retained dataset and server CPU allowance.
 
+Live Runs validation on 24 October 2026: all 332 application tests passed in
+Node 26, all 10 release-policy tests passed, and TypeScript/Vite production
+building passed. New cases cover the exact native MiMo `parameter` trailer,
+strict rejection of other suffixes/objects/invalid fields, private event access,
+launch/cancel transitions, live limits and schedule changes, fresh reconnect
+snapshots and subscription cleanup on disconnect/shutdown. Offline replay of all
+24 privately captured trailer responses passed the original schema and
+source-quote validation. Raw responses remain outside the published repository.
+
+Synthetic browser checks at 1440×1000 and 390×844 passed for compact activity
+rows, named status icons, processing spinners, details/attempt drawers, retry,
+live changes initiated by another caller, offline indication with retained rows,
+resynchronization after completion while offline, unsaved limit edits, saved
+limits and the market progress banner. Runs, the banner and daily status share
+one connection; each viewport opened exactly one replacement after the deliberate
+disconnect. Idle checks observed no run/job/schedule polling, with no page errors
+or horizontal overflow. These UI checks used no live marketplace/provider calls.
+
 Automated checks establish source behavior. A browser check establishes the
 rendered controls and interactions. A source/provider check establishes the
 specific live request observed. A deployment check must identify the selected

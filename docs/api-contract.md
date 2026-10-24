@@ -36,6 +36,16 @@ Use the following paths locally; prepend `/admin` on the hosted app.
 
 ### Runs
 
+- `GET /api/runs/events` → private server-sent events (`text/event-stream`). Each
+  `activity` event contains a full `RunActivity` snapshot: the first Runs page,
+  daily-scan status and current/latest process-owned job. State changes coalesce
+  for 100 ms; a 15-second heartbeat also reconciles clock-dependent quotas and
+  maintenance flags. Reconnect always sends current state, without cursor replay.
+  Slow readers receive the latest snapshot after draining; disconnect and shutdown
+  release subscriptions. Public access is denied, and a foreign Origin is rejected.
+  Payloads use the existing redacted summaries, excluding raw checkpoints,
+  listing/provider text, credentials and proxy endpoints. `HEAD` sends headers
+  without starting a subscription.
 - `GET /api/runs?offset=0` → `RunsResponse`: 50 latest logical runs, `hasMore`,
   busy/active status, saved operational limits and marketplace usage. Each entry
   is the latest attempt; active and waiting entries appear first.

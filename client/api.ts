@@ -2,7 +2,7 @@ export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
 
-const apiBase = /^\/admin(?:\/|$)/.test(window.location.pathname)
+export const apiBase = /^\/admin(?:\/|$)/.test(window.location.pathname)
   ? "/admin/api"
   : "/api";
 

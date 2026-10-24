@@ -93,3 +93,20 @@ transport, deadline, truncation, JSON and field-validation failures in diagnosti
 This choice is based on the documented contract, not a measured accuracy
 comparison between models. No live model comparison was performed. The accepted
 scope fixes future assessments and preserves historical warnings.
+
+## Native MiMo JSON trailer — 24 October 2026
+
+A subsequent run on the deployed revision still reported invalid hardware JSON.
+Inspection of the gateway's private retained responses found 24 extraction
+responses containing a complete JSON object followed by the exact literal
+`parameter`. All had `finish_reason: stop`; this was not truncation. Corrective
+retries recovered most, but an affected local listing still fell back to rules.
+
+The extraction decoder now removes only this exact suffix immediately after a
+closing object brace, then runs the same JSON parser, full schema and source-quote
+validation. It rejects arbitrary prose, extra objects, repeated markers and
+invalid field values. This avoids another paid call for an intact object without
+guessing or repairing hardware facts. Synthetic regression fixtures contain no
+seller/provider payloads. Original run warnings remain unchanged; focused listing
+analysis can reassess the affected retained item within the normal admission and
+budget gates.

@@ -1,19 +1,19 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { Activity, ArrowRight, ChevronDown, Play, RefreshCw, Settings2 } from 'lucide-react';
+import { ArrowRight, ChevronDown, LoaderCircle, Play, RefreshCw, Settings2, TriangleAlert } from 'lucide-react';
 import type { AppSettings, Category, RefreshJob, RunLimits, RunParameters, RunSummary, RunsResponse } from '../shared/types';
 import { message, post, request } from './api';
 import { categoryLabels, usd } from './format';
+import Drawer from './Drawer';
+import { RunStatus, runStatusLabels as statusLabel } from './RunStatus';
+import type { RunActivityState } from './run-activity';
 
 const activeStates = ['collecting', 'assessing', 'comparing'];
 const stamp = (value: string | null) => value ? new Date(value).toLocaleString() : '—';
 const title = (run: RunSummary) => `${categoryLabels[run.job.category]}${run.listingId ? ' · listing analysis' : run.job.query ? ` · ${run.job.query}` : ' · market refresh'}`;
-const statusLabel: Record<RunSummary['state'], string> = {
-  collecting: 'Collecting', assessing: 'Extracting specifications', comparing: 'Comparing nationwide',
-  waiting: 'Waiting to resume', complete: 'Complete', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted',
-};
 
-export default function Runs({ settings, onJob, onResults }: {
+export default function Runs({ settings, activity, onJob, onResults }: {
   settings: AppSettings;
+  activity: RunActivityState;
   onJob: (job: RefreshJob) => void;
   onResults: (run: RunSummary) => void;
 }) {
@@ -22,6 +22,8 @@ export default function Runs({ settings, onJob, onResults }: {
   const [selected, setSelected] = useState<string | null>(null);
   const selectedRef = useRef(selected); selectedRef.current = selected;
   const [detail, setDetail] = useState<{ run: RunSummary; attempts: RunSummary[] } | null>(null);
+  const detailRef = useRef(detail); detailRef.current = detail;
+  const closeDetail = useCallback(() => { setSelected(null); setDetail(null); }, []);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
   const [pending, setPending] = useState(false);
@@ -46,14 +48,31 @@ export default function Runs({ settings, onJob, onResults }: {
     }
   }, [offset, selected]);
   useEffect(() => {
-    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try { await load(controller.signal); } catch (error) { if (!controller.signal.aborted) setError(message(error)); }
-      if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 4000);
-    };
-    void poll();
-    return () => { controller.abort(); clearTimeout(timer); };
+    const controller = new AbortController();
+    void load(controller.signal).catch(error => { if (!controller.signal.aborted) setError(message(error)); });
+    return () => controller.abort();
   }, [load]);
+  const pageRoots = activity.snapshot?.runs.runs.map(run => run.id).join(',');
+  useEffect(() => {
+    if (!activity.snapshot) return;
+    const result = activity.snapshot.runs;
+    if (offset === 0) setData(result);
+    else setData(current => current && ({ ...current, busy: result.busy, activeId: result.activeId,
+      limits: result.limits, marketplace: result.marketplace }));
+    if (!dirtyRef.current) setLimits(result.limits);
+    const existing = detailRef.current;
+    const latest = existing && result.runs.find(run => run.rootId === existing.run.rootId);
+    if (latest) {
+      if (latest.id !== existing.run.id) void load().catch(error => setError(message(error)));
+      else setDetail(current => current && ({ run: latest, attempts: current.attempts.map(attempt => attempt.id === latest.id ? latest : attempt) }));
+    }
+  }, [activity.snapshot, offset, load]);
+  useEffect(() => {
+    if (!offset) return;
+    const controller = new AbortController();
+    void load(controller.signal).catch(error => { if (!controller.signal.aborted) setError(message(error)); });
+    return () => controller.abort();
+  }, [pageRoots, offset, load]);
   const mutate = async (work: () => Promise<void>) => {
     if (actionLock.current) return;
     actionLock.current = true; setPending(true); setError(null); setNotice('');
@@ -97,16 +116,16 @@ export default function Runs({ settings, onJob, onResults }: {
 
   return <section className="page-content runs-page">
     <div className="page-heading"><div><div className="page-kicker">PRIVATE WORKSPACE</div><h1>Runs</h1>
-      <p>Collect listings, extract specifications, and compare nationwide prices.</p></div><Activity size={30} /></div>
+      <p>Collection, specifications and nationwide comparisons.</p></div></div>
     {error && <div className="notice error-notice" role="alert">{error}<button className="button" onClick={() => void mutate(async () => {})}>Reload status</button></div>}
     {notice && <p className="run-notice" role="status">{notice}</p>}
     {!data && !error && <p role="status">Loading runs…</p>}
     {data?.busy && <div className="run-notice" role="status">{data.activeId ? <>A run is active. <button className="text-button" onClick={() => { setDetail(null); setSelected(data.activeId); }}>Inspect active run</button></> : 'New runs are unavailable during an AI connection test or deployment.'}</div>}
     {data && <div className="run-metrics">
-      <div><span>Marketplace · rolling 24 hours</span><strong>{data.marketplace.requests.used} / {data.marketplace.requests.limit}</strong><small>{data.marketplace.requests.remaining} requests remaining</small></div>
-      <div><span>Reserved for manual work</span><strong>{data.marketplace.requests.manualReserve}</strong><small>Automatic use: {data.marketplace.requests.automaticUsed}</small></div>
-      <div><span>Active marketplace workers</span><strong>{data.marketplace.proxies?.activeWorkers ?? 0} / {data.marketplace.proxies?.workerLimit ?? data.limits.marketplaceWorkers}</strong><small>Three seconds between starts per worker</small></div>
-      <div><span>Active AI workers</span><strong>{data.marketplace.ai?.active ?? 0} / {data.marketplace.ai?.limit ?? data.limits.aiWorkers}</strong><small>Shared run allowance</small></div>
+      <div title={`${data.marketplace.requests.remaining} requests remaining in the rolling 24-hour window`}><span>Requests / 24h</span><strong>{data.marketplace.requests.used} <small>/ {data.marketplace.requests.limit}</small></strong></div>
+      <div title={`${data.marketplace.requests.automaticUsed} requests used by automatic work`}><span>Manual reserve</span><strong>{data.marketplace.requests.manualReserve}</strong></div>
+      <div title="Active marketplace workers; three seconds between starts per worker"><span>Marketplace workers</span><strong>{data.marketplace.proxies?.activeWorkers ?? 0} <small>/ {data.marketplace.proxies?.workerLimit ?? data.limits.marketplaceWorkers}</small></strong></div>
+      <div title="Active AI workflows sharing the run allowance"><span>AI workers</span><strong>{data.marketplace.ai?.active ?? 0} <small>/ {data.marketplace.ai?.limit ?? data.limits.aiWorkers}</small></strong></div>
     </div>}
     <div className="run-controls">
       <details className="run-panel"><summary><Play size={17} /> Start a run <ChevronDown size={16} /></summary>
@@ -136,19 +155,26 @@ export default function Runs({ settings, onJob, onResults }: {
         </form>}
       </details>
     </div>
-    <div className="run-history-heading"><h2>Activity</h2><span>Completed and cancelled history · 90 days</span></div>
+    <div className="run-history-heading"><h2>Activity</h2><span>Resolved history · 90 days</span></div>
     {data && !data.runs.length && <div className="run-panel run-empty"><h3>No runs yet</h3><p>Start a category refresh above. Scheduled scans and listing analyses appear here too.</p></div>}
-    <div className="run-list">{data?.runs.map(run => <button key={run.id} className={`run-row ${current?.rootId === run.rootId ? 'selected' : ''}`}
-      onClick={() => { setDetail(null); setSelected(run.id); }} aria-label={`Inspect ${title(run)}: ${statusLabel[run.state]}`}>
-      <span><strong>{title(run)}</strong><small>{run.automatic ? 'Scheduled' : 'Manual'}{run.job.retryOf ? ' · resumed attempt' : ''} · {stamp(run.job.startedAt)}</small></span>
-      <span className={`run-state state-${run.state}`}>{statusLabel[run.state]}</span>
-      <span className="run-row-counts">{run.job.scanned} collected · {run.job.assessed} extracted · {run.job.benchmarked} compared</span>
-      <ArrowRight size={17} />
-    </button>)}</div>
+    {data && data.runs.length > 0 && <div className="run-table-wrap"><table className="run-table">
+      <thead><tr><th><span className="sr-only">Status</span></th><th>Run</th><th className="run-count">Collected</th><th className="run-count" title="Listings checked with AI, cached evidence or local rules">Checked</th><th className="run-count">Compared</th><th>AI cost</th></tr></thead>
+      <tbody>{data.runs.map(run => <tr key={run.id} className={current?.rootId === run.rootId ? 'selected' : ''}>
+        <td><RunStatus state={run.state} /></td>
+        <td><button className="run-open" onClick={() => { setDetail(null); setSelected(run.id); }} aria-label={`Inspect ${title(run)}: ${statusLabel[run.state]}`}>
+          <strong>{title(run)}{run.aiIssue && <TriangleAlert size={14} aria-label="AI warning" />}</strong>
+          <small>{run.automatic ? 'Scheduled' : 'Manual'}{run.job.retryOf ? ' · resumed' : ''} · {stamp(run.job.startedAt)}</small>
+          <small className="run-mobile-counts">{run.job.scanned} collected · {run.job.assessed} checked · {run.job.benchmarked} compared</small>
+        </button></td>
+        <td className="run-count">{run.job.scanned}</td><td className="run-count">{run.job.assessed}</td><td className="run-count">{run.job.benchmarked}</td><td className="run-cost">{usd(run.job.aiCostUsd)}</td>
+      </tr>)}</tbody>
+    </table></div>}
     {data && (offset > 0 || data.hasMore) && <div className="run-actions"><button className="button" disabled={offset === 0} onClick={() => setOffset(v => Math.max(0, v - 50))}>Previous</button><span>Page {offset / 50 + 1}</span><button className="button" disabled={!data.hasMore} onClick={() => setOffset(v => v + 50)}>Next</button></div>}
-    {selected && !detail && <p role="status">Loading run details…</p>}
-    {current && <section className="run-panel run-detail" aria-label="Run details">
-      <div className="run-history-heading"><h2>{title(current)}</h2><span className={`run-state state-${current.state}`}>{statusLabel[current.state]}</span></div>
+    {selected && <Drawer title={current ? title(current) : 'Run details'} subtitle={current ? stamp(current.job.startedAt) : undefined} onClose={closeDetail}>
+    {error && <p className="error-text" role="alert">{error}</p>}
+    {!current && <p role="status"><LoaderCircle size={16} className="spin" /> Loading run details…</p>}
+    {current && <section className="run-detail" aria-label="Run details">
+      <div className="run-detail-status"><RunStatus state={current.state} /><span>{current.automatic ? 'Scheduled' : 'Manual'}{current.job.retryOf ? ' · resumed attempt' : ''}</span></div>
       <p>{current.job.message}</p>
       {current.stage && !activeStates.includes(current.state) && <p className="run-caption">Last stage: {statusLabel[current.stage]}</p>}
       {current.job.error && <p className="error-text">{current.job.error}</p>}
@@ -156,7 +182,7 @@ export default function Runs({ settings, onJob, onResults }: {
       {current.state === 'waiting' && <p>Automatic recovery is queued{current.job.resumeAt ? ` for ${stamp(current.job.resumeAt)} or later` : ''}. Resume checks availability; source cooldowns and request limits still apply.</p>}
       <dl className="run-facts">
         <div><dt>Collected / target</dt><dd>{current.job.scanned} / {current.job.target}</dd></div>
-        <div><dt>Specifications extracted</dt><dd>{current.job.assessed}</dd></div>
+        <div><dt>Listings checked</dt><dd>{current.job.assessed}</dd></div>
         <div><dt>Listings compared</dt><dd>{current.job.benchmarked}</dd></div>
         <div><dt>Configurations</dt><dd>{current.job.configurationsCompleted ?? 0} / {current.job.configurationsTotal ?? '—'}</dd></div>
         <div><dt>Requests, all attempts</dt><dd>{current.job.requestCount}</dd></div>
@@ -168,11 +194,12 @@ export default function Runs({ settings, onJob, onResults }: {
         <p>Up to {current.parameters.scanLimit} local listings and {current.parameters.benchmarkLimit} national offers per query. RAM ≥ {current.parameters.minRamGb} GB; VRAM ≥ {current.parameters.minVramGb} GB; unknown memory {current.parameters.includeUnknownMemory ? 'included' : 'excluded'}. AI {current.parameters.aiEnabled ? 'enabled when configured' : 'disabled'}.</p>
         <p>Workers for this attempt: {current.workers.marketplaceWorkers} marketplace, {current.workers.aiWorkers} AI.</p>
         <ol className="run-attempts">{detail.attempts.map(attempt => <li key={attempt.id}>
-          <strong>{statusLabel[attempt.state]}</strong> · {stamp(attempt.job.startedAt)} → {stamp(attempt.job.completedAt)}
+          <RunStatus state={attempt.state} /> · {stamp(attempt.job.startedAt)} → {stamp(attempt.job.completedAt)}
           <p>{attempt.job.error || attempt.job.message}</p><small>Accounted AI: {usd(attempt.job.aiCostUsd)} · {attempt.job.requestCount} cumulative requests</small>
         </li>)}</ol>
       </details>
     </section>}
+    </Drawer>}
   </section>;
 }
 

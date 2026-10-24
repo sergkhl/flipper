@@ -512,6 +512,25 @@ test('invalid hardware JSON gets one corrective retry without replaying its untr
   assert.ok(!JSON.stringify(calls[2]!.body).includes('hidden-fixture-key'));
 });
 
+test('the observed native MiMo parameter trailer preserves validated facts without another paid call', async () => {
+  const marked = completion(); marked.choices[0]!.message.content += 'parameter\n';
+  const { client, calls } = scriptedClient([reply(decisions()), reply(marked)]);
+  assert.equal((await client.assess(raw, new RefreshBudget(0.25))).method, 'ai');
+  assert.equal(calls.length, 2);
+});
+
+test('trailer handling never accepts arbitrary prose, multiple objects or invalid hardware fields', async () => {
+  for (const suffix of ['parameters', ' explanation', '{}', 'parameterparameter']) {
+    const marked = completion(); marked.choices[0]!.message.content += suffix;
+    const { client } = scriptedClient([reply(decisions()), reply(marked), reply(marked)]);
+    await assert.rejects(client.assess(raw, new RefreshBudget(0.25)), /invalid hardware JSON/);
+  }
+  const invalid = extraction(); invalid.profile.ramGb = 0;
+  const marked = completion(invalid); marked.choices[0]!.message.content += 'parameter';
+  const { client } = scriptedClient([reply(decisions()), reply(marked), reply(marked)]);
+  await assert.rejects(client.assess(raw, new RefreshBudget(0.25)), /profile.ramGb \(too_small\)/);
+});
+
 test('truncated extraction increases only its retry output ceiling and still refuses partial output', async () => {
   const truncated = completion(); truncated.choices[0]!.finish_reason = 'length';
   const recovered = scriptedClient([reply(decisions()), reply(truncated), reply(completion())]);

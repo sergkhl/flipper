@@ -16,13 +16,16 @@ import { message, post, request } from "./api";
 import { usd } from "./format";
 import { ramMinimums, vramMinimums } from "./memory";
 import DailyScans from "./DailyScans";
+import type { RunActivityState } from './run-activity';
 
 type Probe = { model: string; ok: boolean; error?: string; costUsd?: number };
 export default function SettingsDrawer({
+  activity,
   bootstrap,
   onClose,
   onSaved,
 }: {
+  activity: RunActivityState;
   bootstrap: AdminBootstrapResponse;
   onClose: () => void;
   onSaved: (bootstrap: AdminBootstrapResponse, quiet?: boolean) => void;
@@ -95,7 +98,7 @@ export default function SettingsDrawer({
       onClose={onClose}
     >
       <form onSubmit={save} className="settings-form">
-        <DailyScans initial={bootstrap.schedule} />
+        <DailyScans initial={bootstrap.schedule} activity={activity} />
         <section className="settings-section">
           <div className="section-heading">
             <h3>Your price rules</h3>

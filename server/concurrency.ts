@@ -2,7 +2,7 @@
 export class WorkPool {
   private active = 0;
   private waiting: Array<() => void> = [];
-  constructor(readonly limit: number) {
+  constructor(readonly limit: number, private onChange?: () => void) {
     if (!Number.isInteger(limit) || limit < 1) throw new Error('Concurrency must be a positive integer');
   }
   get running(): number { return this.active; }
@@ -10,10 +10,12 @@ export class WorkPool {
     signal?.throwIfAborted();
     if (this.active >= this.limit) await new Promise<void>(resolve => this.waiting.push(resolve));
     else this.active++;
+    this.onChange?.();
     try { signal?.throwIfAborted(); return await work(); }
     finally {
       const next = this.waiting.shift();
       if (next) next(); else this.active--;
+      this.onChange?.();
     }
   }
 }

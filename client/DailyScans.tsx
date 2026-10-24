@@ -3,6 +3,8 @@ import { CalendarClock, LoaderCircle } from 'lucide-react';
 import type { DailyScanStatus } from '../shared/types';
 import { message, post, request } from './api';
 import { categoryLabels, usd } from './format';
+import { ActivityConnection, RunStatus } from './RunStatus';
+import type { RunActivityState } from './run-activity';
 
 function vietnamTime(value: string | null): string {
   return value ? new Date(value).toLocaleString('en-GB', {
@@ -18,18 +20,12 @@ const states = {
   proxy: 'Queued work is waiting for a working proxy',
 };
 
-export default function DailyScans({ initial }: { initial: DailyScanStatus }) {
+export default function DailyScans({ initial, activity }: { initial: DailyScanStatus; activity: RunActivityState }) {
   const [schedule, setSchedule] = useState(initial), [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      try { const value = await request<DailyScanStatus>('/schedule'); if (mounted) { setSchedule(value); setError(null); } }
-      catch (error) { if (mounted) setError(message(error)); }
-    };
-    void load(); const timer = setInterval(() => void load(), 5_000);
-    return () => { mounted = false; clearInterval(timer); };
-  }, []);
+    if (activity.snapshot) setSchedule(activity.snapshot.schedule);
+  }, [activity.snapshot]);
   const toggle = async () => {
     setSaving(true); setError(null);
     try { setSchedule(await post<DailyScanStatus>('/schedule', { enabled: !schedule.enabled })); }
@@ -43,7 +39,7 @@ export default function DailyScans({ initial }: { initial: DailyScanStatus }) {
     finally { setSaving(false); }
   };
   return <section className="settings-section daily-scans">
-    <div className="section-heading"><h3>Daily market scans</h3><CalendarClock size={19} /></div>
+    <div className="section-heading"><h3>Daily market scans</h3><ActivityConnection connection={activity.connection} /><CalendarClock size={19} /></div>
     <p className="section-caption">Laptops, desktops and graphics cards refresh sequentially from <strong>12:00 PM (noon) Vietnam time</strong>,
       including hardware checks and nationwide price comparisons. This runs on the server.</p>
     <div className="daily-scan-control">
@@ -59,7 +55,7 @@ export default function DailyScans({ initial }: { initial: DailyScanStatus }) {
     {schedule.retries.length > 0 && <div className="daily-scan-history">
       <h4>Queued work and recovery</h4>
       <ul>{schedule.retries.map(retry => <li key={retry.id}>
-        <div><strong>{categoryLabels[retry.category]}</strong><span className="badge">{retry.status}</span></div>
+        <div><strong>{categoryLabels[retry.category]}</strong><RunStatus state={retry.status} /></div>
         <p>{retry.status === 'waiting' ? `Automatic retry after ${vietnamTime(schedule.cooldown && schedule.cooldown.until > retry.dueAt ? schedule.cooldown.until : retry.dueAt)}.` : retry.job.message}
           {` ${usd(retry.spentUsd)} total accounted cost; ${usd(Math.max(0, retry.budgetUsd - retry.spentUsd))} remains in the original allowance.`}
           {retry.aiIssue && ` ${retry.aiIssue}`}</p>
@@ -73,7 +69,7 @@ export default function DailyScans({ initial }: { initial: DailyScanStatus }) {
       <ul>{schedule.categories.map(category => {
         const attempt = schedule.attempts.find(attempt => attempt.category === category);
         return <li key={category}>
-          <div><strong>{categoryLabels[category]}</strong><span className="badge">{attempt?.status ?? 'Not started'}</span></div>
+          <div><strong>{categoryLabels[category]}</strong><RunStatus state={attempt?.status ?? 'pending'} /></div>
           {attempt && <p>{attempt.job?.message ?? (attempt.status === 'interrupted' ? 'Interrupted by an application restart; no automatic retry today.' : 'Starting refresh…')}
             {attempt.job && ` ${attempt.job.scanned} collected · ${attempt.job.benchmarked} compared · ${usd(attempt.job.aiCostUsd)} accounted AI cost.`}
             {attempt.job?.error && ` ${attempt.job.error}`}{attempt.aiIssue && ` ${attempt.aiIssue}`}</p>}

@@ -83,11 +83,14 @@ backups and private deployment configuration are ignored by Git.
    when a bounded category refresh has not yet compared their configuration.
 4. Bookmark or dismiss listings and save searches in the personal workspace.
    Saved searches restore filters; saving one does not create a scan schedule.
-5. Open **Runs** to launch refreshes, inspect progress and errors, retry/resume or
+5. Open **Runs** to launch refreshes, inspect live progress and errors, retry/resume or
    cancel work, and edit worker counts and request allowances. Run history and
    attempts persist across restarts; completed/cancelled history is kept for 90
    days. Retry/Resume retains progress and spending. Run again creates a separate
-   manual run with a fresh allowance. Existing scheduled/recovery snapshots are
+   manual run with a fresh allowance. Compact rows use status icons (spinners
+   during processing); select a run for its details drawer. Runs, the market
+   progress banner and daily scans share live updates and reconnect automatically.
+   Existing scheduled/recovery snapshots are
    imported; older in-memory manual history is unavailable.
 6. Use **Settings & AI** for memory defaults, price thresholds, optional model
    access, and the separate daily-scan controls.
