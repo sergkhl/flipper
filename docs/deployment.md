@@ -84,6 +84,20 @@ Emergency image rollback can select the previous verified detached revision.
 Return to the clean primary `main` workflow before the next routine deployment;
 keep unrelated archived/private history outside the published main lineage.
 
+## Runs journal and compatibility
+
+The private Runs page adds an SQLite journal for manual and automatic attempts.
+Startup imports retained scheduled/recovery snapshots and marks unfinished
+journal entries interrupted. Explicit Resume retains the original allowance,
+including reservations for uncertain AI charges. Older manual history was held
+only in memory and cannot be recovered. Resolved run families expire after 90
+days; unresolved records remain.
+
+Operational worker/request settings persist alongside ordinary settings. An
+older image ignores these settings and the run journal, so rollback requires
+reviewing its fixed limits and loss of Runs controls before resuming operations.
+The existing release procedure and backup gate still apply.
+
 ## Daily schedule and schema compatibility
 
 The daily scanner starts with the server but defaults to disabled. Enable it

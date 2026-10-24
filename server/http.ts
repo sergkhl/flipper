@@ -6,12 +6,25 @@ import type { AppSettings } from '../shared/types.ts';
 import { FlipperService } from './service.ts';
 import { serverOptions, validAdminToken, validateServerAccess, type ServerOptions } from './access.ts';
 import { SourceCooldownError } from './source-cooldown.ts';
+import { validateRunLimits } from './runs.ts';
 
 const categorySchema = z.enum(['laptop','desktop','gpu']);
 const memoryMinimumSchema = z.number().int().min(0).max(4096);
 const memorySettingsSchema = {
   minRamGb: memoryMinimumSchema.optional(), minVramGb: memoryMinimumSchema.optional(), includeUnknownMemory: z.boolean().optional(),
 };
+const runParametersSchema = z.object({
+  ...memorySettingsSchema, scanLimit: z.number().int().min(1).max(1000).optional(),
+  benchmarkLimit: z.number().int().min(20).max(60).optional(),
+  aiBudgetUsd: z.number().finite().min(0).max(10).optional(), aiEnabled: z.boolean().optional(),
+}).strict();
+const runLimitsSchema = z.object({
+  marketplaceWorkers: z.number().int().min(1).max(8), aiWorkers: z.number().int().min(1).max(8),
+  requestLimit: z.number().int().positive(), automaticRequestLimit: z.number().int().positive(),
+  automaticCategoryRequestLimit: z.number().int().positive(),
+}).strict().superRefine((value, ctx) => {
+  try { validateRunLimits(value); } catch (error) { ctx.addIssue({ code: 'custom', message: (error as Error).message }); }
+});
 const settingsSchema = z.object({
   ...memorySettingsSchema,
   discountPercent: z.number().finite().min(0).max(90).optional(),
@@ -91,7 +104,7 @@ export function appServer(service: FlipperService, dist = resolve('dist'), optio
       }
       const readRequest = req.method === 'GET' || req.method === 'HEAD';
       const ensureNotInMaintenance = () => {
-        const cancellingJob = req.method === 'POST' && /^\/api\/jobs\/[^/]+\/cancel$/.test(path);
+        const cancellingJob = req.method === 'POST' && /^\/api\/(?:jobs|runs)\/[^/]+\/cancel$/.test(path);
         if (!cancellingJob && service.store.deploymentMaintenanceActive()) throw new HTTPError(503, 'Deployment is in progress; try again shortly');
       };
       const mutationBody = async () => {
@@ -111,6 +124,32 @@ export function appServer(service: FlipperService, dist = resolve('dist'), optio
         if (path === '/api/listings' && url.searchParams.get('view') === 'saved') throw new HTTPError(403, 'Saved listings require administrator access');
       }
       if (path === '/api/bootstrap' && readRequest) return json(res, publicReadOnly ? service.publicBootstrap() : service.bootstrap());
+      if (path === '/api/runs' && readRequest) {
+        const offset = parse(z.coerce.number().int().min(0).max(1_000_000), url.searchParams.get('offset') ?? 0);
+        return json(res, service.runs(offset));
+      }
+      if (path === '/api/runs/limits' && req.method === 'POST') {
+        const limits = parse(runLimitsSchema, await mutationBody());
+        service.store.saveSettings({ ...service.store.getSettings(), ...limits });
+        return json(res, { limits });
+      }
+      if (path === '/api/runs' && req.method === 'POST') {
+        const data = parse(z.object({ category: categorySchema, query: z.string().max(200).default(''),
+          parameters: runParametersSchema.default({}) }).strict(), await mutationBody());
+        return json(res, { job: service.startRun(data.category, data.query, data.parameters) }, 202);
+      }
+      const runMatch = path.match(/^\/api\/runs\/([^/]+)(?:\/(resume|retry|cancel|again))?$/);
+      if (runMatch) {
+        const id = decodeURIComponent(runMatch[1]!);
+        if (!service.runDetail(id)) throw new HTTPError(404, 'Run not found');
+        if (!runMatch[2] && readRequest) return json(res, service.runDetail(id));
+        if (runMatch[2] && req.method === 'POST') {
+          parse(z.object({}).strict(), await mutationBody());
+          const job = runMatch[2] === 'cancel' ? service.cancelRun(id)
+            : runMatch[2] === 'again' ? service.runAgain(id) : service.resumeRun(id);
+          return json(res, { job }, 202);
+        }
+      }
       if (path === '/api/schedule' && readRequest) return json(res, service.scheduleStatus());
       if (path === '/api/schedule' && req.method === 'POST') {
         const { enabled } = parse(z.object({ enabled: z.boolean() }).strict(), await mutationBody());
@@ -184,7 +223,7 @@ export function appServer(service: FlipperService, dist = resolve('dist'), optio
       const cooldown = !publicReadOnly && error instanceof SourceCooldownError ? error.cooldown : null;
       if (cooldown) res.setHeader('Retry-After', String(Math.max(0, Math.ceil((Date.parse(cooldown.until) - Date.now()) / 1000))));
       const status = error instanceof HTTPError ? error.status : cooldown ? 429 : !publicReadOnly && message === 'Deployment is in progress; try again shortly' ? 503
-        : !publicReadOnly && /already running|already queued|active refresh|Wait for/.test(message) ? 409 : 500;
+        : !publicReadOnly && /already running|already queued|active refresh|Wait for|newer attempt|cannot be resumed|cannot be cancelled|waiting for source/.test(message) ? 409 : 500;
       json(res, { error: publicReadOnly && !(error instanceof HTTPError) ? 'The request could not be completed' : message,
         ...(cooldown ? { retryAt: cooldown.until } : {}) }, status);
     }

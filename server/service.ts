@@ -14,9 +14,11 @@ import type { ScanRetry, SourceCooldown } from '../shared/types.ts';
 import { activeCooldown, SourceCooldownError } from './source-cooldown.ts';
 import { reconcileAssessment } from './assessment.ts';
 import { ProxyPool } from './proxies.ts';
-import { AUTOMATIC_PART_SEARCHES, LOCAL_DETAIL_LIMIT, NATIONAL_OFFER_LIMIT, SourceDeferredError, AI_CONCURRENCY, SOURCE_WORKERS } from './source-policy.ts';
+import { AUTOMATIC_PART_SEARCHES, LOCAL_DETAIL_LIMIT, NATIONAL_OFFER_LIMIT, SourceDeferredError } from './source-policy.ts';
 import type { RefreshProgress } from '../shared/types.ts';
 import { WorkPool, KeyedWork, concurrent } from './concurrency.ts';
+import { runSummary, runLimits, type StoredRun } from './runs.ts';
+import type { RunParameters, RunsResponse } from '../shared/types.ts';
 
 const POOL_AGE_MS = 6 * 60 * 60 * 1000;
 const AUTO_COHORTS = 12;
@@ -93,6 +95,7 @@ export class FlipperService {
   constructor(readonly store: Store, source?: Source, private memoryCatalog?: MemoryCatalog,
     private now: () => Date = () => new Date()) {
     this.source = source ?? new ChototClient({ cooldownStore: store, requestStore: store, proxies: new ProxyPool(store) });
+    store.importRunHistory(this.now()); store.interruptRuns(this.now());
   }
   private countRequest(context: JobContext): void { if (!this.source.beginJob) context.job.requestCount++; }
 
@@ -125,7 +128,7 @@ export class FlipperService {
       lastError: this.aiError, totalCostUsd: this.store.totalCost() };
   }
   private marketplaceStatus() { return { requests: this.store.sourceBudgetStatus(this.now()), proxies: this.source.proxyStatus?.() ?? null,
-    ai: { limit: AI_CONCURRENCY, active: this.active?.aiGate.running ?? 0 } }; }
+    ai: { limit: this.active?.settings.aiWorkers ?? this.store.getSettings().aiWorkers, active: this.active?.aiGate.running ?? 0 } }; }
   bootstrap(): AdminBootstrapResponse { return { access: 'admin', settings: this.store.getSettings(), ai: this.aiStatus(), schedule: this.scheduleStatus(), searches: this.store.searches(), counts: this.store.counts(), marketplace: this.marketplaceStatus() }; }
   scheduleStatus(now = this.now()) { return { ...dailyScanStatus(this.store, this.activeJob(), this.deploymentStatus().busy, now), marketplace: this.marketplaceStatus() }; }
   configureDailyScans(enabled: boolean, now = this.now()) {
@@ -142,9 +145,16 @@ export class FlipperService {
     const pending = this.store.pendingScanRetry(job.category, job.query);
     if (pending && pending.originalJobId !== job.id) throw new Error('A refresh retry is already queued for this category and search');
     const persisted = this.store.recordSourceCooldown(cooldown);
-    return this.store.deferScanRetry(job, { ...settings, scanLimit: job.target, aiBudgetUsd: budgetUsd }, persisted, null);
+    const retry = this.store.deferScanRetry(job, { ...settings, scanLimit: job.target, aiBudgetUsd: budgetUsd }, persisted, null);
+    this.store.importRunHistory(this.now(), retry.id);
+    return retry;
   }
-  cancelScanRetry(id: string): ScanRetry { this.ensureWorkAllowed(); return this.store.cancelScanRetry(id); }
+  cancelScanRetry(id: string): ScanRetry {
+    this.ensureWorkAllowed(); const retry = this.store.cancelScanRetry(id);
+    const run = this.store.getRun(retry.job.id);
+    if (run) this.store.saveRun({ ...run, state: 'cancelled', job: { ...retry.job, message: 'Cancelled; saved progress remains available to resume.' } }, this.now());
+    return retry;
+  }
   private ensureSourceAvailable(now = this.now()): void {
     const cooldown = activeCooldown(this.store.sourceCooldown(), now);
     if (cooldown) throw new SourceCooldownError(cooldown);
@@ -245,11 +255,64 @@ export class FlipperService {
   getJob(id: string): RefreshJob | null {
     const queued = this.store.scanRetries().find(retry => retry.originalJobId === id || retry.job.id === id);
     return queued && queued.status !== 'running' ? queued.status === 'waiting'
-      ? { ...queued.job, status: 'waiting', resumeAt: queued.dueAt } : queued.job : this.jobs.get(id) ?? queued?.job ?? null;
+      ? { ...queued.job, status: 'waiting', resumeAt: queued.dueAt } : queued.job : this.jobs.get(id) ?? queued?.job ?? this.store.getRun(id)?.job ?? null;
   }
   cancelJob(id: string): RefreshJob | null {
     if (this.active?.job.id === id) { this.active.abort.abort(); this.active.job.message = 'Cancelling after the current request'; }
     return this.jobs.get(id) ?? null;
+  }
+  runs(offset = 0): RunsResponse {
+    const records = this.store.listRuns(offset);
+    return { runs: records.slice(0, 50).map(runSummary), hasMore: records.length > 50,
+      busy: this.deploymentStatus().busy || this.store.deploymentMaintenanceActive(), activeId: this.active?.job.id ?? null,
+      limits: runLimits(this.store.getSettings()), marketplace: this.marketplaceStatus() };
+  }
+  runDetail(id: string) {
+    const run = this.store.getRun(id);
+    return run ? { run: runSummary(this.store.latestRun(run.rootId)!), attempts: this.store.runHistory(run.rootId).map(runSummary) } : null;
+  }
+  private latestRun(id: string): StoredRun {
+    const run = this.store.getRun(id);
+    if (!run) throw new Error('Run not found');
+    const latest = this.store.latestRun(run.rootId)!;
+    if (latest.id !== id) throw new Error('Run has a newer attempt; reload before acting');
+    return latest;
+  }
+  cancelRun(id: string): RefreshJob {
+    const run = this.latestRun(id);
+    if (this.active?.job.id === id) return this.cancelJob(id)!;
+    if (run.retryId && this.store.scanRetry(run.retryId)?.status === 'waiting') return this.cancelScanRetry(run.retryId).job;
+    if (run.state === 'complete') throw new Error('Completed runs cannot be cancelled');
+    const job = { ...run.job, status: 'cancelled' as const, completedAt: this.now().toISOString(), message: 'Cancelled; saved progress remains available to resume.' };
+    this.store.saveRun({ ...run, state: 'cancelled', job }, this.now()); return job;
+  }
+  resumeRun(id: string): RefreshJob {
+    this.ensureWorkAllowed();
+    if (this.active || this.aiProbeRunning) throw new Error('Wait for the active refresh or AI probe before resuming');
+    const run = this.latestRun(id);
+    if (!['waiting', 'failed', 'cancelled', 'interrupted'].includes(run.state)) throw new Error('This run cannot be resumed');
+    this.ensureSourceAvailable();
+    const pending = this.store.pendingScanRetry(run.job.category, run.job.query, run.listingId);
+    if (pending && pending.id !== run.retryId) throw new Error('A refresh retry is already queued for this scope');
+    const retry = this.store.deferScanRetry(run.job, run.settings, { until: this.now().toISOString() }, run.scheduledDay ?? null, run.retryId,
+      { automatic: run.automatic, listingId: run.listingId, progress: run.progress });
+    const claim = this.store.claimScanRetry(this.now(), retry.id);
+    if (!claim) throw new Error('Run is waiting for source availability');
+    return this.startRecovery(claim.retry, claim.settings, this.now());
+  }
+  runAgain(id: string): RefreshJob {
+    const run = this.latestRun(id);
+    // A new manual run gets its own allowance, with the previous scope and parameters.
+    const context = this.startJob(run.job.category, run.job.query, run.job.target, run.parameters, run.listingId, run.parameters);
+    if (run.listingId) {
+      const listing = this.store.getListing(run.listingId)!;
+      void this.track(this.runFocused(context, listing));
+    } else this.launchRefresh(context);
+    return context.job;
+  }
+  startRun(category: Category, query: string, parameters: Partial<RunParameters>): RefreshJob {
+    const context = this.startJob(category, query, parameters.scanLimit, parameters, undefined, parameters);
+    this.launchRefresh(context); return context.job;
   }
   clearAIStatus(): void { this.aiError = null; this.budgetLimited = false; }
   private ensureWorkAllowed(): void {
@@ -302,14 +365,15 @@ export class FlipperService {
     context.job.message = 'Retrieving this listing and focused nationwide comparisons';
     void this.track(this.runFocused(context, listing)); return context.job;
   }
-  private startJob(category: Category, query: string, limit?: number, memory: Partial<MemoryFilters> = {}, listingId?: string): JobContext {
+  private startJob(category: Category, query: string, limit?: number, memory: Partial<MemoryFilters> = {}, listingId?: string, parameters: Partial<RunParameters> = {}): JobContext {
     this.ensureWorkAllowed();
     if (this.active) throw new Error('A refresh is already running. Wait for it or cancel it first.');
     if (this.aiProbeRunning) throw new Error('Wait for the active AI probe before starting a refresh or analysis');
     this.ensureSourceAvailable();
     if (this.store.pendingScanRetry(category, normalize(query), listingId)) throw new Error('A refresh retry is already queued for this category and search');
-    const settings = this.store.getSettings();
-    return this.createJob(category, query, settings, limit, memory);
+    if (listingId && !this.store.getListing(listingId)) throw new Error('Listing not found');
+    const settings = { ...this.store.getSettings(), ...parameters };
+    return this.createJob(category, query, settings, limit, memory, this.now(), undefined, false, { listingId });
   }
   /** Claims only after the shared job/probe/maintenance gate, with no await gap. */
   tryStartDailyRefresh(now = this.now()): RefreshJob | null {
@@ -318,25 +382,25 @@ export class FlipperService {
     const recovery = this.store.claimScanRetry(now);
     if (recovery) {
       const { retry, settings } = recovery;
-      const context = this.createJob(retry.category, retry.query, settings, retry.job.target, {}, now, retry, retry.automatic ?? retry.dailyDay !== null);
-      context.retryId = retry.id;
-      context.listingId = retry.listingId;
-      if (retry.dailyDay) context.scheduledDay = retry.dailyDay;
-      this.store.recordScanRetry(retry.id, context.job, null);
-      if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, context.job);
-      if (retry.listingId) {
-        const listing = this.store.getListing(retry.listingId);
-        if (listing) void this.track(this.runFocused(context, listing));
-        else { context.job.status = 'failed'; context.job.error = 'Queued listing is no longer retained'; this.finish(context); }
-      } else this.launchRefresh(context);
-      return context.job;
+      return this.startRecovery(retry, settings, now);
     }
     const claim = this.store.claimDailyScan(this.store.getSettings(), now);
     if (!claim) return null;
-    const context = this.createJob(claim.attempt.category, '', claim.settings, undefined, {}, now, undefined, true);
-    context.scheduledDay = claim.attempt.day;
-    this.store.recordDailyScan(context.scheduledDay, context.job);
+    const context = this.createJob(claim.attempt.category, '', claim.settings, undefined, {}, now, undefined, true, { scheduledDay: claim.attempt.day });
+    this.store.recordDailyScan(claim.attempt.day, context.job);
+    this.checkpoint(context);
     this.launchRefresh(context);
+    return context.job;
+  }
+  private startRecovery(retry: ScanRetry, settings: AppSettings, now: Date): RefreshJob {
+    const context = this.createJob(retry.category, retry.query, settings, retry.job.target, {}, now, retry, retry.automatic ?? retry.dailyDay !== null);
+    this.checkpoint(context);
+    if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, context.job);
+    if (retry.listingId) {
+      const listing = this.store.getListing(retry.listingId);
+      if (listing) void this.track(this.runFocused(context, listing));
+      else { context.job.status = 'failed'; context.job.error = 'Queued listing is no longer retained'; this.finish(context); }
+    } else this.launchRefresh(context);
     return context.job;
   }
   private launchRefresh(context: JobContext): void {
@@ -347,25 +411,28 @@ export class FlipperService {
     });
   }
   private createJob(category: Category, query: string, settings: AppSettings, limit?: number,
-    memory: Partial<MemoryFilters> = {}, now = this.now(), retry?: ScanRetry, automatic = false): JobContext {
+    memory: Partial<MemoryFilters> = {}, now = this.now(), retry?: ScanRetry, automatic = false,
+    scope: { listingId?: string; scheduledDay?: string } = {}): JobContext {
     settings = { ...settings, benchmarkLimit: Math.min(settings.benchmarkLimit, NATIONAL_OFFER_LIMIT) };
     const job: RefreshJob = { id: randomUUID(), category, query: normalize(query), status: 'collecting', message: 'Collecting live Da Nang listings',
       scanned: 0, target: limit ?? settings.scanLimit, assessed: 0, benchmarked: 0, totalAvailable: retry?.job.totalAvailable ?? null, requestCount: retry?.job.requestCount ?? 0, aiCostUsd: retry?.spentUsd ?? 0,
       error: null, startedAt: now.toISOString(), completedAt: null, ...(retry ? { retryOf: retry.originalJobId } : {}) };
     const key = settings.aiEnabled ? this.store.getKey() : '';
     const context: JobContext = { job, abort: new AbortController(), budget: new RefreshBudget(settings.aiBudgetUsd, retry?.spentUsd), settings,
+      retryId: retry?.id, listingId: retry?.listingId ?? scope.listingId, scheduledDay: retry?.dailyDay ?? scope.scheduledDay,
       memory: { minRamGb: memory.minRamGb ?? settings.minRamGb, minVramGb: memory.minVramGb ?? settings.minVramGb,
         includeUnknownMemory: memory.includeUnknownMemory ?? settings.includeUnknownMemory }, pools: new Map(),
       ai: key ? new LiteLLMClient({ key, onReceipt: (receipt) => {
         this.store.addReceipt(receipt); job.aiCostUsd = context.budget.spent;
-        if (context.retryId) this.store.recordScanRetry(context.retryId, job, this.aiError, context.progress);
+        this.checkpoint(context);
         if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, job);
       } }) : null, aiStopped: false, aiFailures: 0, automatic,
-      aiGate: new WorkPool(AI_CONCURRENCY), poolLocks: new KeyedWork(), assessments: new Map(),
+      aiGate: new WorkPool(settings.aiWorkers), poolLocks: new KeyedWork(), assessments: new Map(),
       progress: retry?.progress ? structuredClone(retry.progress) : { ids: [], nextPage: 1, collected: false, assessedIds: [], comparedIds: [], initialDetails: 0 } };
-    this.source.beginJob?.({ id: job.id, category, automatic, onRequest: () => { job.requestCount++; } });
+    this.source.beginJob?.({ id: job.id, category, automatic, workers: settings.marketplaceWorkers, onRequest: () => { job.requestCount++; this.checkpoint(context); } });
     this.clearAIStatus(); this.active = context; this.jobs.set(job.id, job);
     if (this.jobs.size > 50) this.jobs.delete(this.jobs.keys().next().value!);
+    this.checkpoint(context);
     return context;
   }
   private checkWork(context: JobContext): void {
@@ -375,7 +442,9 @@ export class FlipperService {
     if (!context.stopped || error instanceof SourceCooldownError) context.stopped = error;
   }
   private async parallel<T, R>(context: JobContext, items: readonly T[], work: (item: T, index: number) => Promise<R>): Promise<R[]> {
-    return concurrent(items, SOURCE_WORKERS, async (item, index) => {
+    // Each external pool enforces its own limit. Keep enough workflows available
+    // to feed either pool when their configured sizes differ.
+    return concurrent(items, Math.max(context.settings.marketplaceWorkers, context.settings.aiWorkers), async (item, index) => {
       this.checkWork(context);
       try { return await work(item, index); }
       catch (error) { this.stopWork(context, error); throw error; }
@@ -384,6 +453,21 @@ export class FlipperService {
   private checkpoint(context: JobContext): void {
     context.job.aiCostUsd = context.budget.spent;
     if (context.retryId) this.store.recordScanRetry(context.retryId, context.job, this.aiError, context.progress);
+    const settings = { ...context.settings, ...context.memory, scanLimit: context.job.target };
+    const { scanLimit, benchmarkLimit, aiBudgetUsd, aiEnabled, minRamGb, minVramGb, includeUnknownMemory } = settings;
+    const retry = context.retryId ? this.store.scanRetry(context.retryId) : null;
+    const waiting = retry?.status === 'waiting';
+    this.store.saveRun({ id: context.job.id, rootId: context.job.retryOf
+      ? this.store.getRun(context.job.retryOf)?.rootId ?? context.job.retryOf : context.job.id,
+      stage: ['collecting', 'assessing', 'comparing'].includes(context.job.status)
+        ? context.job.status as StoredRun['stage'] : this.store.getRun(context.job.id)?.stage,
+      job: { ...context.job, ...(waiting ? { status: 'waiting', resumeAt: retry.dueAt } : {}) },
+      state: waiting ? 'waiting' : context.job.status,
+      parameters: { scanLimit, benchmarkLimit, aiBudgetUsd, aiEnabled, minRamGb, minVramGb, includeUnknownMemory },
+      workers: { marketplaceWorkers: settings.marketplaceWorkers, aiWorkers: settings.aiWorkers },
+      automatic: context.automatic, listingId: context.listingId, scheduledDay: context.scheduledDay,
+      aiIssue: this.budgetLimited ? 'AI allowance exhausted; conservative parsing continued' : this.aiError,
+      settings, progress: context.progress, retryId: context.retryId }, this.now());
   }
   private assessed(raw: RawListing, context: JobContext): Promise<Assessment> {
     this.checkWork(context);
@@ -463,6 +547,10 @@ export class FlipperService {
         progress.assessedIds = progress.assessedIds.filter(item => item !== id);
         progress.comparedIds = progress.comparedIds.filter(item => item !== id);
       }
+      if (stored && progress.comparedIds.includes(id)) {
+        const issue = this.view(stored).valuation.evidenceIssue;
+        if (issue === 'stale_reference' || issue === 'outdated_policy') progress.comparedIds = progress.comparedIds.filter(item => item !== id);
+      }
     }
     job.scanned = gathered.size; job.assessed = progress.assessedIds.length; job.benchmarked = progress.comparedIds.length;
     try {
@@ -481,6 +569,7 @@ export class FlipperService {
       }
       progress.collected = true;
       job.status = 'assessing'; job.message = 'Checking listing types, condition and hardware specifications';
+      this.checkpoint(context);
       // Spend bounded detail/AI work on known memory matches, then possible
       // matches with missing capacities, then known failures, ordered by price.
       const ordered = [...gathered.values()].map((raw) => ({ raw,
@@ -523,6 +612,7 @@ export class FlipperService {
       }
       job.configurationsTotal = count; job.configurationsCompleted = completedConfigurations.size;
       job.message = `Comparing hardware configurations: ${job.configurationsCompleted} of ${count} complete`;
+      this.checkpoint(context);
       await this.parallel(context, selected, async ([key, members]) => {
         await this.benchmark(members, context);
         progress.comparedIds.push(...members.map(member => member.raw.id));
@@ -551,6 +641,7 @@ export class FlipperService {
       this.checkpoint(context);
       if (assessment.eligibility === 'eligible') {
         context.job.status = 'comparing'; context.job.message = 'Retrieving focused nationwide price evidence';
+        this.checkpoint(context);
         await this.benchmark([updated], context);
       }
       context.job.status = 'complete'; context.job.message = 'Listing analysis complete; see specifications, status and price evidence';
@@ -588,6 +679,8 @@ export class FlipperService {
       : this.aiError ? `${context.aiStopped ? 'AI paused after repeated failures' : 'Some AI assessments failed'}: ${this.aiError}` : null;
     if (context.retryId) this.store.recordScanRetry(context.retryId, context.job, aiIssue, context.progress);
     if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, context.job, aiIssue);
+    this.checkpoint(context);
+    this.store.pruneRuns(this.now());
     if (this.active === context) this.active = null;
     this.source.endJob?.();
   }
@@ -628,8 +721,8 @@ export class FlipperService {
       this.checkWork(context);
       pool = [];
       // Assess small batches, retaining unneeded raw offers for another target.
-      for (let offset = 0; offset < progress.raws.length; offset += AI_CONCURRENCY) {
-        const batch = await this.parallel(context, progress.raws.slice(offset, offset + AI_CONCURRENCY), async raw => {
+      for (let offset = 0; offset < progress.raws.length; offset += context.settings.aiWorkers) {
+        const batch = await this.parallel(context, progress.raws.slice(offset, offset + context.settings.aiWorkers), async raw => {
           const hash = assessmentHash(raw), existing = assessed.get(raw.id);
           const assessment = existing?.hash === hash ? existing.assessment : await this.assessed(raw, context);
           assessed.set(raw.id, { hash, assessment });
@@ -656,7 +749,7 @@ export class FlipperService {
         const supported = kind === 'desktop' || kind === 'laptop'
           ? buildReference(target.raw, target.assessment, pool, context.settings).reference?.sampleCount ?? 0
           : filterComparableOffers(target.raw, target.assessment.profile, kind, pool).accepted.length;
-        const size = Math.min(SOURCE_WORKERS, 20 - progress.detailedIds.length, Math.max(1, required - supported));
+        const size = Math.min(context.settings.marketplaceWorkers, 20 - progress.detailedIds.length, Math.max(1, required - supported));
         await this.parallel(context, candidates.slice(0, size), async next => {
           const updated = await this.enriched(next.raw, context);
           progress.raws[next.index] = updated; progress.detailedIds.push(next.raw.id);

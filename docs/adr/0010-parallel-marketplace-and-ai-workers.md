@@ -1,5 +1,7 @@
 # Parallelize proxy collection and AI work under shared allowances
 
+ADR 0011 adds configurable worker/request limits and durable run controls.
+
 Accepted 24 October 2026 after the parallel-processing interview. This replaces
 ADR 0009's single-request transport, stable job proxy and 500-attempt total limit.
 The operator selected four marketplace workers, three seconds between starts

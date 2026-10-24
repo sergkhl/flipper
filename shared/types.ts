@@ -206,6 +206,11 @@ export interface ListingView extends RawListing {
   state: ListingState;
 }
 export interface AppSettings {
+  marketplaceWorkers: number;
+  aiWorkers: number;
+  requestLimit: number;
+  automaticRequestLimit: number;
+  automaticCategoryRequestLimit: number;
   minRamGb: number;
   minVramGb: number;
   includeUnknownMemory: boolean;
@@ -275,6 +280,29 @@ export interface RefreshJob {
   resumeAt?: string;
   configurationsCompleted?: number;
   configurationsTotal?: number;
+}
+export type RunLimits = Pick<AppSettings, 'marketplaceWorkers' | 'aiWorkers' | 'requestLimit' | 'automaticRequestLimit' | 'automaticCategoryRequestLimit'>;
+export type RunParameters = Pick<AppSettings, 'scanLimit' | 'benchmarkLimit' | 'aiBudgetUsd' | 'aiEnabled' | 'minRamGb' | 'minVramGb' | 'includeUnknownMemory'>;
+export interface RunSummary {
+  id: string;
+  rootId: string;
+  state: RefreshJob['status'] | 'interrupted';
+  stage?: 'collecting' | 'assessing' | 'comparing';
+  job: RefreshJob;
+  parameters: RunParameters;
+  workers: Pick<RunLimits, 'marketplaceWorkers' | 'aiWorkers'>;
+  automatic: boolean;
+  listingId?: string;
+  scheduledDay?: string;
+  aiIssue: string | null;
+}
+export interface RunsResponse {
+  runs: RunSummary[];
+  hasMore: boolean;
+  busy: boolean;
+  activeId: string | null;
+  limits: RunLimits;
+  marketplace: MarketplaceStatus;
 }
 export interface ListingsResponse {
   items: ListingView[];

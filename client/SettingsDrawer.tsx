@@ -51,8 +51,10 @@ export default function SettingsDrawer({
     setSaving(true);
     setError(null);
     try {
+      const { marketplaceWorkers: _marketplaceWorkers, aiWorkers: _aiWorkers, requestLimit: _requestLimit,
+        automaticRequestLimit: _automaticRequestLimit, automaticCategoryRequestLimit: _categoryLimit, ...settingsDraft } = draft;
       const payload = {
-        ...draft,
+        ...settingsDraft,
         ...(removeKey
           ? { liteLlmKey: "" }
           : key.trim()

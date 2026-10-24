@@ -35,7 +35,7 @@ port normalization, redirects, complete response-body serialization and a 429
 that blocks every route across restart. Queue tests cover partial local/national
 resumption, duplicate-seller pagination, reuse/extension of shared pools, manual
 analysis alongside queued category work, fresh timestamps, daily coalescing,
-latest settings and automatic versus on-demand component searches. Live public
+captured parameters despite changed defaults, and automatic versus on-demand component searches. Live public
 proxy connectivity is checked separately without marketplace calls during an
 active source cooldown.
 
@@ -48,6 +48,21 @@ pagination without duplicate pages, and cancellation with a durable completed
 configuration checkpoint. Source/provider failures stop new work while preserving
 results from already-started calls. Tests use mocked routes and providers; real
 performance and proxy health must be reported separately.
+
+Run-control tests cover durable manual failures, cancellation and explicit resume,
+restart interruption with uncertain AI accounting, immutable targets/filters and
+AI budgets, attempt families, 90-day resolved-history retention, private API
+redaction, stale-attempt rejection, maintenance cancellation, and request-limit
+changes without ledger resets. Worker tests exercise 1, 2 and 8 marketplace slots
+and AI limits independently of marketplace concurrency. Browser checks exercise
+launch, retry, cancellation, persisted limit edits and anonymous access at desktop
+and mobile sizes against synthetic sources.
+
+Runs validation on 24 October 2026: all 314 fixture tests passed in the Node 26
+container, and the production TypeScript/Vite build passed. Synthetic browser
+checks at 1440×1080 and 390×844 exercised retry, launch, cancellation, persisted
+worker edits, reload and anonymous access. Both had no page errors or horizontal
+overflow. No live marketplace or paid-provider requests were made.
 
 Market-opening checks cover read deadlines, stalled response bodies, caller
 cancellation and catalog updates. In a browser, check a stalled bootstrap,

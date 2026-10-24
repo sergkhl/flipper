@@ -29,6 +29,51 @@ async function settled(service: FlipperService, id: string) {
 }
 const catalog: typeof fetch = async () => new Response(routes.join('\n'));
 
+test('marketplace worker changes take effect at the next job, including eight workers', async () => {
+  const store = new Store('', true);
+  const candidates = Array.from({ length: 8 }, (_, i) => `http://8.8.2.${i + 1}:8080`);
+  let active = 0, maximum = 0;
+  const pool = new ProxyPool(store, { download: async () => new Response(candidates.join('\n')), probe: async () => true,
+    send: async () => { maximum = Math.max(maximum, ++active); await delay(20); active--; return new Response(page); } });
+  const client = new ChototClient({ pauseMs: 0, proxies: pool, requestStore: store });
+  try {
+    for (const workers of [1, 8, 2]) {
+      maximum = 0;
+      client.beginJob({ id: `workers-${workers}`, category: 'gpu', automatic: false, workers, onRequest() {} });
+      await Promise.all(Array.from({ length: 8 }, () => client.search(input)));
+      assert.equal(maximum, workers); assert.equal(client.proxyStatus()?.workerLimit, workers);
+      client.endJob();
+    }
+  } finally { await client.close(); store.close(); }
+});
+
+test('AI assessment concurrency follows its own saved worker limit', async () => {
+  const store = new Store('', true), original = LiteLLMClient.prototype.assess;
+  const priorKey = process.env.LITELLM_API_KEY;
+  process.env.LITELLM_API_KEY = 'synthetic-no-network-key';
+  let active = 0, maximum = 0;
+  LiteLLMClient.prototype.assess = async function (item) {
+    maximum = Math.max(maximum, ++active); await delay(15); active--; return assessWithRules(item);
+  };
+  const source = { async search(input: { location: string; query?: string }) {
+    return { items: input.location === 'danang' ? Array.from({ length: 8 }, (_, i) => raw(`ai-limit-${input.query}-${i}`, 5_000_000 + i * 100_000, { description: `Working card ${input.query} ${i}` })) : [], total: 8 };
+  }, async detail(item: RawListing) { return item; } };
+  const service = new FlipperService(store, source);
+  try {
+    for (const aiWorkers of [2, 1, 8]) {
+      maximum = 0;
+      store.saveSettings({ ...store.getSettings(), marketplaceWorkers: 1, aiWorkers });
+      const job = service.refresh('gpu', `workers-${aiWorkers}`); await settled(service, job.id);
+      assert.equal(maximum, aiWorkers);
+      assert.equal(store.getRun(job.id)?.workers.aiWorkers, aiWorkers);
+    }
+  } finally {
+    LiteLLMClient.prototype.assess = original;
+    if (priorKey === undefined) delete process.env.LITELLM_API_KEY; else process.env.LITELLM_API_KEY = priorKey;
+    await service.shutdown(); store.close();
+  }
+});
+
 test('four proxy workers overlap bodies while retaining one request per route', async () => {
   const store = new Store('', true), controllers: ReadableStreamDefaultController<Uint8Array>[] = [];
   const byRoute = new Map<string,number>(); let active = 0, maximum = 0;

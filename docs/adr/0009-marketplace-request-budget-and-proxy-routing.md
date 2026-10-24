@@ -1,6 +1,8 @@
 # Bound marketplace traffic and resume through public HTTPS proxies
 
 ADR 0010 supersedes the concurrency, proxy assignment and total allowance below.
+ADR 0011 makes those limits configurable and preserves captured run parameters
+on resumption instead of adopting current automatic scan defaults.
 
 Accepted 24 October 2026 after the request-reduction interview. This extends
 ADR 0007's durable recovery queue and narrows the collection bounds in ADR 0006.

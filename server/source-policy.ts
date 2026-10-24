@@ -13,6 +13,7 @@ export const NATIONAL_OFFER_LIMIT = 60;
 export const AUTOMATIC_PART_SEARCHES = 2;
 
 export interface SourceRequestContext {
+  workers?: number;
   id: string;
   category: Category;
   automatic: boolean;
