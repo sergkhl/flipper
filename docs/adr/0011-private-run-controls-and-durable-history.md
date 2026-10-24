@@ -57,3 +57,19 @@ parameter and spending preservation, admission and privacy boundaries, retention
 live quota edits, and independent marketplace/AI concurrency. Browser checks use
 synthetic activity at desktop/mobile sizes. These checks do not establish live
 marketplace or model-provider availability.
+
+Follow-up accepted 24 October 2026: use a compact activity table and a details
+drawer, a single metrics strip and collapsed launch/limit forms. Status icons
+replace status labels; collecting, assessing and comparing use an animated
+spinner. Each icon keeps an accessible name and tooltip, and reduced-motion
+preferences disable its animation. Keep AI warnings visible beside the run.
+
+Share one private server-sent event connection across Runs, the market progress
+banner and daily-scan status. Push replaceable snapshots of current status,
+counters, spending, workers, limits and schedule outcomes after state changes.
+Keep the existing durable attempt history. Automatic reconnect preserves the
+last displayed state, shows a reconnecting indicator and receives a fresh
+snapshot; it does not rely on a durable event log or polling fallback. Keep
+checkpoints, seller text, credentials and proxy endpoints outside the stream.
+After a provider fix, bounded focused reassessment can repair affected retained
+listings while preserving the original attempt and its warning.

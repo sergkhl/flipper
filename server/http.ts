@@ -7,6 +7,7 @@ import { FlipperService } from './service.ts';
 import { serverOptions, validAdminToken, validateServerAccess, type ServerOptions } from './access.ts';
 import { SourceCooldownError } from './source-cooldown.ts';
 import { validateRunLimits } from './runs.ts';
+import { streamRunActivity } from './run-events.ts';
 
 const categorySchema = z.enum(['laptop','desktop','gpu']);
 const memoryMinimumSchema = z.number().int().min(0).max(4096);
@@ -124,6 +125,11 @@ export function appServer(service: FlipperService, dist = resolve('dist'), optio
         if (path === '/api/listings' && url.searchParams.get('view') === 'saved') throw new HTTPError(403, 'Saved listings require administrator access');
       }
       if (path === '/api/bootstrap' && readRequest) return json(res, publicReadOnly ? service.publicBootstrap() : service.bootstrap());
+      if (path === '/api/runs/events' && readRequest) {
+        ensureWriteOrigin(req, access.publicOrigin);
+        if (req.method === 'HEAD') { res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' }); return res.end(); }
+        return streamRunActivity(service, res);
+      }
       if (path === '/api/runs' && readRequest) {
         const offset = parse(z.coerce.number().int().min(0).max(1_000_000), url.searchParams.get('offset') ?? 0);
         return json(res, service.runs(offset));

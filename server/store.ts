@@ -25,6 +25,12 @@ export function assessmentHash(raw: RawListing): string {
 }
 
 export class Store {
+  private activityListeners = new Set<() => void>();
+  subscribeActivity(listener: () => void): () => void {
+    this.activityListeners.add(listener);
+    return () => { this.activityListeners.delete(listener); };
+  }
+  notifyActivity(): void { for (const listener of this.activityListeners) listener(); }
   private db: sqlite.DatabaseSync;
   private directory: string;
   constructor(directory = '.data', memory = false) {
@@ -68,6 +74,7 @@ export class Store {
     this.db.prepare(`INSERT INTO runs(id,root_id,state,updated_at,json) VALUES(?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET state=excluded.state,updated_at=excluded.updated_at,json=excluded.json`)
       .run(run.id, run.rootId, run.state, now.toISOString(), JSON.stringify(run));
+    this.notifyActivity();
   }
   getRun(id: string): StoredRun | null {
     const row = this.db.prepare('SELECT json FROM runs WHERE id=?').get(id) as { json: string } | undefined;
@@ -162,6 +169,7 @@ export class Store {
   saveSettings(settings: AppSettings): void {
     validateRunLimits(settings);
     this.db.prepare('INSERT INTO settings(id,json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET json=excluded.json').run(JSON.stringify(settings));
+    this.notifyActivity();
   }
   getKey(): string {
     if (process.env.LITELLM_API_KEY?.trim()) return process.env.LITELLM_API_KEY.trim();
@@ -294,6 +302,7 @@ export class Store {
   }
   setRuntimeValue(key: string, value: unknown): void {
     this.db.prepare('INSERT OR REPLACE INTO source_runtime(key,json) VALUES(?,?)').run(key, JSON.stringify(value));
+    this.notifyActivity();
   }
   sourceBudgetStatus(now = new Date()): SourceBudgetStatus {
     const limits = this.getSettings();
@@ -384,6 +393,7 @@ export class Store {
       .run(retry.id, retry.originalJobId, retry.category, retry.query, retry.status, retry.dueAt, JSON.stringify(retry), JSON.stringify(settings), retry.listingId ?? '');
     else this.db.prepare('UPDATE scan_retries SET status=?,due_at=?,json=? WHERE id=?')
       .run(retry.status, retry.dueAt, JSON.stringify(retry), retry.id);
+    this.notifyActivity();
   }
   /** A retry and a due daily category share one job and the tighter captured allowance. */
   claimScanRetry(now: Date, id?: string): { retry: ScanRetry; settings: AppSettings } | null {
@@ -457,6 +467,7 @@ export class Store {
     const previous = this.dailyScanControl();
     const control: DailyScanControl = { enabled, firstDueAt: enabled && !previous.enabled ? nextVietnamNoon(now) : previous.firstDueAt };
     this.db.prepare('INSERT INTO daily_scan_control(id,json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET json=excluded.json').run(JSON.stringify(control));
+    this.notifyActivity();
   }
   latestDailyScanDay(): string | null {
     return (this.db.prepare('SELECT MAX(day) AS day FROM daily_scan_attempts').get() as { day: string | null }).day;
@@ -506,6 +517,7 @@ export class Store {
       status: terminal ? job.status as 'complete' | 'failed' | 'cancelled' | 'waiting' : 'running', completedAt: terminal ? job.completedAt : null };
     this.db.prepare('UPDATE daily_scan_attempts SET json=?,cost_usd=? WHERE day=? AND category=?')
       .run(JSON.stringify(updated), snapshot.aiCostUsd, day, job.category);
+    this.notifyActivity();
   }
   interruptDailyScans(now = new Date()): void {
     // Called once on owner startup, never by a status read or timer tick.

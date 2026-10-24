@@ -471,7 +471,14 @@ export class LiteLLMClient {
       }
       if (choice.finish_reason !== 'stop') throw new Error('MiMo did not complete the requested hardware extraction.');
       let decoded: unknown;
-      try { decoded = JSON.parse(choice.message.content); }
+      try {
+        // Native MiMo occasionally appends its literal `parameter` marker after
+        // a complete JSON object even with finish_reason=stop and JSON mode.
+        // Remove only that observed trailer; JSON syntax, schema and source
+        // quotes still have to validate. Never extract an object from prose.
+        const content = choice.message.content.trim();
+        decoded = JSON.parse(content.endsWith('}parameter') ? content.slice(0, -'parameter'.length) : content);
+      }
       catch { throw new RetryableAIError('MiMo returned invalid hardware JSON.', { feedback: 'invalid JSON syntax' }); }
       const parsed = extractionSchema.safeParse(decoded);
       if (!parsed.success) {

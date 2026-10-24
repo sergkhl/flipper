@@ -43,7 +43,7 @@ import type {
   RefreshJob,
   SavedSearch,
 } from "../shared/types";
-import { ApiError, message, post, READ_TIMEOUT_MS, request } from "./api";
+import { message, post, READ_TIMEOUT_MS, request } from "./api";
 import { evidenceLabel } from "./valuation";
 import {
   categoryLabels,
@@ -57,6 +57,8 @@ import {
 import ListingDrawer from "./ListingDrawer";
 import SettingsDrawer from "./SettingsDrawer";
 import Runs from "./Runs";
+import { useRunActivity } from './run-activity';
+import { ActivityConnection } from './RunStatus';
 import { hasDedicatedVram, hasMemoryTypeEstimates, hasTechApiMemoryData, memoryDescription, ramMinimums, vramMinimums } from "./memory";
 
 type View = "all" | "saved" | "review" | "history" | "indicative" | "components";
@@ -111,6 +113,14 @@ export default function App() {
   const loadDeadline = useRef<number | null>(performance.now() + READ_TIMEOUT_MS);
   const adminBootstrap = bootstrap?.access === "admin" ? bootstrap : null;
   const canManage = adminBootstrap !== null;
+  const activity = useRunActivity(canManage);
+  const latestActivity = useRef(activity.snapshot); latestActivity.current = activity.snapshot;
+  const acceptJob = useCallback((incoming: RefreshJob) => {
+    const observed = latestActivity.current?.job;
+    setJob(observed?.id === incoming.id && !isRunning(observed) ? observed : incoming);
+  }, []);
+  const activityJob = useRef<RefreshJob | null>(null);
+  const lastMarketUpdate = useRef(0);
   const workspaceHome = /^\/admin(?:\/|$)/.test(window.location.pathname)
     ? "/admin/"
     : "/";
@@ -142,15 +152,6 @@ export default function App() {
   useEffect(() => {
     const controller = new AbortController();
     void loadBootstrap(controller.signal)
-      .then((result) => {
-        if (result.access === "admin") {
-          void request<{ job: RefreshJob | null }>("/jobs/active", { signal: controller.signal })
-            .then((active) => setJob(active.job))
-            .catch((error) => {
-              if (!controller.signal.aborted) setError(message(error));
-            });
-        }
-      })
       .catch((error) => {
         if (controller.signal.aborted) return;
         loadDeadline.current = null;
@@ -184,7 +185,6 @@ export default function App() {
       .then((result) => {
         setResponse(result);
         setError(null);
-        if (canManage && result.job) setJob(result.job);
       })
       .catch((error) => {
         if (!controller.signal.aborted) setError(message(error));
@@ -244,54 +244,25 @@ export default function App() {
   }, [selectedId, category, runsOpen]);
 
   useEffect(() => {
-    if (!canManage || !job || !isRunning(job)) return;
-    let cancelled = false;
-    const jobId = job.id;
-    const timer = window.setInterval(async () => {
-      try {
-        const result = await request<{ job: RefreshJob }>(
-          `/jobs/${encodeURIComponent(jobId)}`,
-        );
-        if (cancelled) return;
-        setJob(result.job);
-        setReload((value) => value + 1);
-        if (!isRunning(result.job)) {
-          void loadBootstrap();
-          if (selectedRef.current) void loadDetail(selectedRef.current);
-          if (result.job.status === "failed")
-            setToast({
-              text:
-                result.job.error ||
-                "The refresh failed. Previously collected data is still available.",
-            });
-          else if (result.job.status === "complete")
-            setToast({
-              text: "Refresh complete. Nationwide evidence is ready to inspect.",
-            });
-          else if (result.job.status === "waiting") setToast({ text: result.job.message });
-        }
-      } catch (error) {
-        if (cancelled) return;
-        if (error instanceof ApiError && error.status === 404) {
-          try {
-            const active = await request<{ job: RefreshJob | null }>("/jobs/active");
-            if (cancelled) return;
-            setJob(active.job);
-            setReload((value) => value + 1);
-            setError(null);
-            void loadBootstrap();
-            if (!active.job) setToast({text:"The refresh session ended. Your stored results are still available."});
-          } catch (recoveryError) {
-            if (!cancelled) setError(message(recoveryError));
-          }
-        } else setError(message(error));
-      }
-    }, 1800);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [canManage, job?.id, job?.status, loadBootstrap, loadDetail]);
+    if (!canManage || !activity.snapshot) return;
+    const next = activity.snapshot.job, previous = activityJob.current;
+    activityJob.current = next;
+    setJob(next);
+    setBootstrap(current => current?.access === 'admin' ? { ...current,
+      schedule: activity.snapshot!.schedule, marketplace: activity.snapshot!.runs.marketplace } : current);
+    if (JSON.stringify(previous) === JSON.stringify(next)) return;
+    const finished = previous && isRunning(previous) && (!next || !isRunning(next));
+    if (finished || Date.now() - lastMarketUpdate.current > 1800) {
+      lastMarketUpdate.current = Date.now(); setReload(value => value + 1);
+    }
+    if (finished) {
+      void loadBootstrap().catch(error => setError(message(error)));
+      if (selectedRef.current) void loadDetail(selectedRef.current);
+      if (next?.status === 'failed') setToast({ text: next.error || 'The refresh failed. Previously collected data is still available.' });
+      else if (next?.status === 'complete') setToast({ text: 'Refresh complete. Nationwide evidence is ready to inspect.' });
+      else if (next?.status === 'waiting') setToast({ text: next.message });
+    }
+  }, [canManage, activity.snapshot, loadBootstrap, loadDetail]);
 
   useEffect(() => {
     if (!toast) return;
@@ -362,7 +333,7 @@ export default function App() {
         minVramGb,
         includeUnknownMemory,
       });
-      setJob(result.job);
+      acceptJob(result.job);
       if (result.job.status === "waiting") setToast({ text: result.job.message });
       setError(null);
     } catch (error) {
@@ -377,7 +348,7 @@ export default function App() {
       const result = await post<{ job: RefreshJob }>(
         `/listings/${encodeURIComponent(id)}/analyze`,
       );
-      setJob(result.job);
+      acceptJob(result.job);
       if (result.job.status === "waiting") setToast({ text: result.job.message });
     } catch (error) {
       setToast({ text: message(error) });
@@ -608,6 +579,7 @@ export default function App() {
             </strong>
           </div>
           <div className="topbar-right">
+            {canManage && <ActivityConnection connection={activity.connection} />}
             {canManage && <button className="button subtle runs-link" onClick={() => setRunsOpen(value => !value)}>{runsOpen ? 'Market' : 'Runs'}</button>}
             <span className="nationwide-label">
               <ShieldCheck size={14} /> Nationwide benchmarks
@@ -628,7 +600,7 @@ export default function App() {
             </a>
           </div>
         </header>
-        {runsOpen && adminBootstrap ? <Runs settings={adminBootstrap.settings} onJob={setJob} onResults={run => {
+        {runsOpen && adminBootstrap ? <Runs settings={adminBootstrap.settings} activity={activity} onJob={acceptJob} onResults={run => {
           changeCategory(run.job.category); setQuery(run.job.query); setQueryInput(run.job.query);
           setMaxPrice(''); setOpportunities(false); setMinRamGb(run.parameters.minRamGb); setMinVramGb(run.parameters.minVramGb);
           setIncludeUnknownMemory(run.parameters.includeUnknownMemory); setReload(value => value + 1);
@@ -743,7 +715,7 @@ export default function App() {
                   onClick={() => {
                     if (!canManage) return;
                     void post<{ job: RefreshJob }>(`/jobs/${job.id}/cancel`)
-                      .then((result) => setJob(result.job))
+                      .then((result) => acceptJob(result.job))
                       .catch((error) => setError(message(error)));
                   }}
                 >
@@ -1258,6 +1230,7 @@ export default function App() {
       )}
       {settingsOpen && adminBootstrap && (
         <SettingsDrawer
+          activity={activity}
           bootstrap={adminBootstrap}
           onClose={closeSettings}
           onSaved={(value, quiet) => {

@@ -301,7 +301,7 @@ export class ChototClient {
       const usable = this.workers.filter(worker => !this.proxies || worker.uri);
       if (!usable.length && !this.workers.some(worker => worker.busy)) return this.proxies!.pause();
       const worker = usable.filter(worker => !worker.busy).sort((a,b) => a.nextStart - b.nextStart)[0];
-      if (worker) { worker.busy = true; return worker; }
+      if (worker) { worker.busy = true; this.context?.onActivity?.(); return worker; }
       await new Promise<void>((resolve, reject) => {
         const finish = () => { this.waiting.delete(finish); signal?.removeEventListener('abort', abort); resolve(); };
         const abort = () => { this.waiting.delete(finish); signal?.removeEventListener('abort', abort); reject(signal!.reason); };
@@ -468,7 +468,7 @@ export class ChototClient {
         if (error instanceof Error && /^Chợ Tốt|^This Chợ Tốt/.test(error.message)) throw error;
         throw new Error('Could not read Chợ Tốt. Check the connection and try refreshing again.');
       } finally {
-        clearTimeout(timer); worker.busy = false;
+        clearTimeout(timer); worker.busy = false; this.context?.onActivity?.();
         for (const wake of [...this.waiting]) wake();
       }
       await wait(retryDelay, signal);

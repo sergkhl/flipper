@@ -18,7 +18,7 @@ import { AUTOMATIC_PART_SEARCHES, LOCAL_DETAIL_LIMIT, NATIONAL_OFFER_LIMIT, Sour
 import type { RefreshProgress } from '../shared/types.ts';
 import { WorkPool, KeyedWork, concurrent } from './concurrency.ts';
 import { runSummary, runLimits, type StoredRun } from './runs.ts';
-import type { RunParameters, RunsResponse } from '../shared/types.ts';
+import type { RunActivity, RunParameters, RunsResponse } from '../shared/types.ts';
 
 const POOL_AGE_MS = 6 * 60 * 60 * 1000;
 const AUTO_COHORTS = 12;
@@ -86,12 +86,18 @@ export class FlipperService {
   private source: Source;
   private jobs = new Map<string, RefreshJob>();
   private active: JobContext | null = null;
+  private lastJob: RefreshJob | null = null;
   private aiProbeRunning = false;
   private aiError: string | null = null;
   private budgetLimited = false;
   private stopping = false;
   private pending = new Set<Promise<unknown>>();
   private probeAbort: AbortController | null = null;
+  private shutdownListeners = new Set<() => void>();
+  onShutdown(listener: () => void): () => void {
+    this.shutdownListeners.add(listener);
+    return () => { this.shutdownListeners.delete(listener); };
+  }
   constructor(readonly store: Store, source?: Source, private memoryCatalog?: MemoryCatalog,
     private now: () => Date = () => new Date()) {
     this.source = source ?? new ChototClient({ cooldownStore: store, requestStore: store, proxies: new ProxyPool(store) });
@@ -258,7 +264,7 @@ export class FlipperService {
       ? { ...queued.job, status: 'waiting', resumeAt: queued.dueAt } : queued.job : this.jobs.get(id) ?? queued?.job ?? this.store.getRun(id)?.job ?? null;
   }
   cancelJob(id: string): RefreshJob | null {
-    if (this.active?.job.id === id) { this.active.abort.abort(); this.active.job.message = 'Cancelling after the current request'; }
+    if (this.active?.job.id === id) { this.active.abort.abort(); this.active.job.message = 'Cancelling after the current request'; this.checkpoint(this.active); }
     return this.jobs.get(id) ?? null;
   }
   runs(offset = 0): RunsResponse {
@@ -266,6 +272,10 @@ export class FlipperService {
     return { runs: records.slice(0, 50).map(runSummary), hasMore: records.length > 50,
       busy: this.deploymentStatus().busy || this.store.deploymentMaintenanceActive(), activeId: this.active?.job.id ?? null,
       limits: runLimits(this.store.getSettings()), marketplace: this.marketplaceStatus() };
+  }
+  runActivity(): RunActivity {
+    return { runs: this.runs(), schedule: this.scheduleStatus(),
+      job: this.active?.job ?? (this.lastJob ? this.getJob(this.lastJob.id) : null) };
   }
   runDetail(id: string) {
     const run = this.store.getRun(id);
@@ -326,6 +336,8 @@ export class FlipperService {
   }
   async shutdown(): Promise<void> {
     this.stopping = true;
+    for (const listener of this.shutdownListeners) listener();
+    this.shutdownListeners.clear();
     this.active?.abort.abort(); this.probeAbort?.abort();
     await Promise.allSettled([...this.pending]);
     await this.source.close?.();
@@ -339,6 +351,7 @@ export class FlipperService {
     if (this.active) throw new Error('Wait for or cancel the active refresh before testing AI');
     if (this.aiProbeRunning) throw new Error('An AI probe is already running. Wait for it to finish.');
     this.aiProbeRunning = true;
+    this.store.notifyActivity();
     this.probeAbort = new AbortController();
     try {
       const key = this.store.getKey(); if (!key) throw new Error('Set LITELLM_API_KEY in .env or add a LiteLLM key in Settings first');
@@ -346,7 +359,7 @@ export class FlipperService {
       const results = await client.test(new RefreshBudget(this.store.getSettings().aiBudgetUsd), this.probeAbort.signal);
       this.aiError = results.find((result) => !result.ok)?.error ?? null;
       return results;
-    } finally { this.aiProbeRunning = false; this.probeAbort = null; }
+    } finally { this.aiProbeRunning = false; this.probeAbort = null; this.store.notifyActivity(); }
   }
   refresh(category: Category, query: string, limit?: number, minRamGb?: number, minVramGb?: number, includeUnknownMemory?: boolean): RefreshJob {
     this.ensureWorkAllowed();
@@ -427,10 +440,11 @@ export class FlipperService {
         this.checkpoint(context);
         if (context.scheduledDay) this.store.recordDailyScan(context.scheduledDay, job);
       } }) : null, aiStopped: false, aiFailures: 0, automatic,
-      aiGate: new WorkPool(settings.aiWorkers), poolLocks: new KeyedWork(), assessments: new Map(),
+      aiGate: new WorkPool(settings.aiWorkers, () => this.store.notifyActivity()), poolLocks: new KeyedWork(), assessments: new Map(),
       progress: retry?.progress ? structuredClone(retry.progress) : { ids: [], nextPage: 1, collected: false, assessedIds: [], comparedIds: [], initialDetails: 0 } };
-    this.source.beginJob?.({ id: job.id, category, automatic, workers: settings.marketplaceWorkers, onRequest: () => { job.requestCount++; this.checkpoint(context); } });
-    this.clearAIStatus(); this.active = context; this.jobs.set(job.id, job);
+    this.source.beginJob?.({ id: job.id, category, automatic, workers: settings.marketplaceWorkers,
+      onActivity: () => this.store.notifyActivity(), onRequest: () => { job.requestCount++; this.checkpoint(context); } });
+    this.clearAIStatus(); this.active = context; this.lastJob = job; this.jobs.set(job.id, job);
     if (this.jobs.size > 50) this.jobs.delete(this.jobs.keys().next().value!);
     this.checkpoint(context);
     return context;
@@ -683,6 +697,7 @@ export class FlipperService {
     this.store.pruneRuns(this.now());
     if (this.active === context) this.active = null;
     this.source.endJob?.();
+    this.store.notifyActivity();
   }
   private searchQuery(kind: HardwareKind, listing: StoredListing): string {
     const p = listing.assessment.profile;
