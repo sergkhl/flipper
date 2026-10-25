@@ -18,8 +18,13 @@ the schema and source quotes; JSON mode alone does not enforce hardware fields.
 An isolated numeric range failure in `profile.ramSpeedMhz` is recovered by leaving
 that field null, removing its accepted evidence and retaining the other strictly
 validated fields. The assessment records the discarded speed in its status;
-standalone RAM still requires a verified speed before comparison. Other schema
-violations retain the bounded corrective retry and conservative fallback.
+standalone RAM still requires a verified speed before comparison. The observed
+`priceBasis` aliases `multi` and `multiPrice` become `unknown`, discard evidence
+for that rejected basis and require price review while retaining validated
+hardware facts and multi-price flags/conflicts. These two recoveries can apply
+together. Other schema violations retain the bounded corrective retry and
+conservative fallback. The prompt distinguishes `flags.multiPrice` from the
+five supported price bases and requires `unknown` for ambiguous pricing.
 Seller typos are not repaired by adding/removing zeros: a plausible range does
 not establish the actual installed speed.
 Classification uses
@@ -32,7 +37,8 @@ market prices, comparisons or discounts. Caches include an assessment-contract
 version. Missing keys, provider failures and exhausted budgets leave conservative
 interpretation and fetched evidence available with explicit status.
 
-Manual jobs use the editable manual AI budget. Scheduled jobs use at most USD
+Manual jobs use the saved AI allowance or a launch override. Scheduled jobs use
+the saved allowance, capped at USD
 0.25 per category and USD 0.75 in admitted allowances per nominal Vietnam
 schedule day. Reservations are made before requests; unknown billing consumes
 the reservation. The full category allowance is persisted before a scheduled

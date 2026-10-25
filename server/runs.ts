@@ -1,4 +1,5 @@
 import type { AppSettings, RefreshProgress, RunSummary, RunLimits } from '../shared/types.ts';
+import { MAX_RUN_WORKERS } from '../shared/run-settings.ts';
 
 /** Internal journal: checkpoints never cross the HTTP boundary. */
 export interface StoredRun extends RunSummary {
@@ -18,7 +19,7 @@ export function runLimits(settings: AppSettings): RunLimits {
 
 export function validateRunLimits(value: RunLimits): void {
   for (const key of ['marketplaceWorkers', 'aiWorkers'] as const) {
-    if (!Number.isInteger(value[key]) || value[key] < 1 || value[key] > 8) throw new Error(`${key} must be an integer from 1 to 8`);
+    if (!Number.isInteger(value[key]) || value[key] < 1 || value[key] > MAX_RUN_WORKERS) throw new Error(`${key} must be an integer from 1 to ${MAX_RUN_WORKERS}`);
   }
   for (const key of ['requestLimit', 'automaticRequestLimit', 'automaticCategoryRequestLimit'] as const) {
     if (!Number.isSafeInteger(value[key]) || value[key] < 1) throw new Error(`${key} must be a positive safe integer`);

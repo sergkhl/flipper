@@ -44,6 +44,7 @@ import type {
   SavedSearch,
 } from "../shared/types";
 import { message, post, READ_TIMEOUT_MS, request } from "./api";
+import { DEFAULT_SCAN_LIMIT } from '../shared/run-settings';
 import { evidenceLabel } from "./valuation";
 import {
   categoryLabels,
@@ -442,7 +443,7 @@ export default function App() {
     1000,
     Math.max(
       200,
-      (coverage?.limit ?? adminBootstrap?.settings.scanLimit ?? 100) * 2,
+      (coverage?.limit ?? adminBootstrap?.settings.scanLimit ?? DEFAULT_SCAN_LIMIT) * 2,
     ),
   );
 
@@ -600,7 +601,11 @@ export default function App() {
             </a>
           </div>
         </header>
-        {runsOpen && adminBootstrap ? <Runs settings={adminBootstrap.settings} activity={activity} onJob={acceptJob} onResults={run => {
+        {runsOpen && adminBootstrap ? <Runs settings={adminBootstrap.settings} activity={activity} onJob={acceptJob} onDefaultsSaved={value => {
+          setBootstrap(value); setReload(count => count + 1);
+          setMinRamGb(value.settings.minRamGb); setMinVramGb(value.settings.minVramGb);
+          setIncludeUnknownMemory(value.settings.includeUnknownMemory);
+        }} onResults={run => {
           changeCategory(run.job.category); setQuery(run.job.query); setQueryInput(run.job.query);
           setMaxPrice(''); setOpportunities(false); setMinRamGb(run.parameters.minRamGb); setMinVramGb(run.parameters.minVramGb);
           setIncludeUnknownMemory(run.parameters.includeUnknownMemory); setReload(value => value + 1);

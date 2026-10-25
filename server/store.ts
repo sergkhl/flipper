@@ -68,6 +68,14 @@ export class Store {
     if (!columns.some(column => column.name === 'scope')) this.db.exec("ALTER TABLE scan_retries ADD COLUMN scope TEXT NOT NULL DEFAULT ''");
     this.db.exec(`DROP INDEX IF EXISTS scan_retries_pending;
       CREATE UNIQUE INDEX IF NOT EXISTS scan_retries_pending_v2 ON scan_retries(category,query,scope) WHERE status IN ('waiting','running');`);
+    // Upgrade the former default once. Later explicit choices, including 100,
+    // survive restart; captured run/recovery settings are never rewritten.
+    this.db.exec(`BEGIN IMMEDIATE;
+      UPDATE settings SET json=json_set(json,'$.scanLimit',200)
+        WHERE id=1 AND json_extract(json,'$.scanLimit')=100
+        AND NOT EXISTS (SELECT 1 FROM source_runtime WHERE key='scan_limit_200_migrated');
+      INSERT OR IGNORE INTO source_runtime(key,json) VALUES('scan_limit_200_migrated','true');
+      COMMIT;`);
   }
   close(): void { this.db.close(); }
   saveRun(run: StoredRun, now = new Date()): void {
@@ -504,7 +512,7 @@ export class Store {
       const attempts = this.dailyScanAttempts(day), category = DAILY_SCAN_CATEGORIES.find(category =>
         !attempts.some(attempt => attempt.category === category) && !this.pendingScanRetry(category, ''));
       if (!category) { this.db.exec('COMMIT'); return null; }
-      const claim = this.insertDailyScan({ ...settings, aiBudgetUsd: DAILY_SCAN_CATEGORY_BUDGET }, now, category);
+      const claim = this.insertDailyScan(settings, now, category);
       this.db.exec('COMMIT'); return claim;
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }

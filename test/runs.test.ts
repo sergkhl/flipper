@@ -12,6 +12,7 @@ import { appServer } from '../server/http.ts';
 import { raw } from './helpers.ts';
 import type { StoredRun } from '../server/runs.ts';
 import type { RawListing } from '../shared/types.ts';
+import { runParameters } from '../shared/run-settings.ts';
 
 async function until(condition: () => boolean) {
   const deadline = Date.now() + 5000;
@@ -148,7 +149,7 @@ test('request limit edits apply without resetting charges, including automatic a
     store.reserveSourceRequest('desktop', false, now, 0);
     assert.equal(store.sourceBudgetStatus(now).used, 8);
     assert.throws(() => store.saveSettings({ ...store.getSettings(), automaticRequestLimit: 11 }), /allowance/);
-    assert.throws(() => store.saveSettings({ ...store.getSettings(), aiWorkers: 9 }), /1 to 8/);
+    assert.throws(() => store.saveSettings({ ...store.getSettings(), aiWorkers: 21 }), /1 to 20/);
   } finally { store.close(); }
 });
 
@@ -238,8 +239,14 @@ test('Runs API enforces private access, validation, maintenance, and live limit 
     const started = await post('/admin/api/runs', { category: 'gpu', parameters: { scanLimit: 20 } });
     assert.equal(started.status, 202); const { job } = await started.json(); await until(() => waiting);
     assert.equal((await post('/admin/api/runs', { category: 'laptop' })).status, 409);
+    assert.equal((await post('/admin/api/settings', { scanLimit: 200 })).status, 409);
     const limits = service.runs().limits;
     assert.equal((await post('/admin/api/runs/limits', { ...limits, marketplaceWorkers: 0 })).status, 400);
+    assert.equal((await post('/admin/api/runs/limits', { ...limits, marketplaceWorkers: 21 })).status, 400);
+    assert.equal((await post('/admin/api/runs/limits', { ...limits, aiWorkers: 21 })).status, 400);
+    assert.equal((await post('/admin/api/runs/limits', { ...limits, marketplaceWorkers: 20, aiWorkers: 20 })).status, 200);
+    assert.equal(service.runs().limits.marketplaceWorkers, 20);
+    assert.equal(service.runs().limits.aiWorkers, 20);
     assert.equal((await post('/admin/api/runs/limits', { ...limits, requestLimit: 400 })).status, 400);
     assert.equal((await post('/admin/api/runs/limits', { ...limits, marketplaceWorkers: 2, requestLimit: 800 })).status, 200);
     assert.equal(service.runs().limits.marketplaceWorkers, 2);
@@ -250,6 +257,7 @@ test('Runs API enforces private access, validation, maintenance, and live limit 
     assert.equal('progress' in detail.run, false); assert.equal('settings' in detail.run, false);
     writeFileSync(join(directory, '.deployment-maintenance'), 'fixture');
     assert.equal((await post('/admin/api/runs/limits', limits)).status, 503);
+    assert.equal((await post('/admin/api/settings', { scanLimit: 200 })).status, 503);
     assert.equal((await post(`/admin/api/runs/${job.id}/cancel`, {})).status, 202);
     await settled(service); assert.equal(store.getRun(job.id)?.state, 'cancelled');
     assert.equal((await fetch(base + '/admin/api/runs?offset=-1', { headers })).status, 400);
@@ -257,6 +265,52 @@ test('Runs API enforces private access, validation, maintenance, and live limit 
     assert.equal(foreign.status, 403);
   } finally {
     await service.shutdown(); await new Promise<void>(resolve => server.close(() => resolve()));
+    store.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('explicit run defaults persist across restart and feed new manual and daily runs without rewriting old runs', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'flipper-run-defaults-'));
+  let store = new Store(directory); configure(store);
+  store.saveSettings({ ...store.getSettings(), marketplaceWorkers: 8, aiWorkers: 8, discountPercent: 17 });
+  let service = new FlipperService(store, emptySource);
+  const server = appServer(service, directory, {});
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const post = (path: string, value: unknown) => fetch(base + '/api' + path, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value),
+  });
+  try {
+    assert.equal(store.getSettings().scanLimit, 200);
+    const original = await post('/runs', { category: 'gpu', query: 'one-off', parameters: { scanLimit: 40, aiBudgetUsd: .1 } });
+    assert.equal(original.status, 202); const { job } = await original.json(); await settled(service);
+    assert.equal(store.getSettings().scanLimit, 200, 'starting a run does not save its defaults');
+    const old = store.getRun(job.id)!;
+    const defaults = { scanLimit: 237, benchmarkLimit: 45, aiBudgetUsd: .15, aiEnabled: false,
+      minRamGb: 32, minVramGb: 12, includeUnknownMemory: false };
+    for (const scanLimit of [0, 1001, 1.5]) assert.equal((await post('/settings', { ...defaults, scanLimit })).status, 400);
+    assert.equal((await post('/settings', { scanLimit: 1 })).status, 200, 'all valid run targets can be saved');
+    const saved = await post('/settings', defaults);
+    assert.equal(saved.status, 200);
+    assert.deepEqual(runParameters((await saved.json()).settings), defaults);
+    assert.deepEqual(store.getRun(job.id), old);
+    assert.equal(service.runs().runs.length, 1, 'saving defaults does not start a run');
+    await service.shutdown(); await new Promise<void>(resolve => server.close(() => resolve())); store.close();
+    store = new Store(directory); service = new FlipperService(store, emptySource);
+    assert.deepEqual(runParameters(store.getSettings()), defaults);
+    assert.equal(store.getSettings().marketplaceWorkers, 8); assert.equal(store.getSettings().aiWorkers, 8);
+    assert.equal(store.getSettings().discountPercent, 17);
+    const manual = service.startRun('gpu', '', {}); await settled(service);
+    assert.deepEqual(store.getRun(manual.id)?.parameters, defaults);
+    service.configureDailyScans(true, new Date('2026-10-25T04:00:00Z'));
+    const daily = service.tryStartDailyRefresh(new Date('2026-10-25T05:00:00Z'))!; await settled(service);
+    assert.deepEqual(store.getRun(daily.id)?.parameters, defaults);
+    const again = service.runAgain(job.id); await settled(service);
+    assert.equal(store.getRun(again.id)?.parameters.scanLimit, 40);
+    assert.equal(store.getRun(again.id)?.parameters.aiBudgetUsd, .1);
+  } finally {
+    await service.shutdown();
+    if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
     store.close(); rmSync(directory, { recursive: true, force: true });
   }
 });

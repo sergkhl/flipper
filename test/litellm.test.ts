@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import type { AIReceipt, HardwareKind, RawListing } from '../shared/types.ts';
 import { DECIDER_MODEL, EMPTY_PROFILE, MIMO_MODEL, liteLLMEndpoints } from '../server/config.ts';
 import { BudgetExceededError, LiteLLMClient, RefreshBudget } from '../server/litellm.ts';
+import { reconcileAssessment } from '../server/assessment.ts';
 
 const raw: RawListing = {
   id: 'gpu-123', category: 'gpu', title: 'NVIDIA RTX 3060 12GB',
@@ -474,6 +475,8 @@ test('MiMo receives numeric limits, null rules and a complete example in JSON-ob
   assert.ok(contract.properties.profile.required.includes('ramGb'));
   assert.match(prompt, /never use zero/);
   assert.match(prompt, /"ramGb":null/);
+  assert.match(prompt, /priceBasis is never null/);
+  assert.match(prompt, /Never put multi or multiPrice in priceBasis/);
 });
 
 test('a corrected zero capacity retries only extraction and preserves both paid receipts', async () => {
@@ -529,6 +532,61 @@ test('RAM speed recovery cannot hide another schema violation or accept a wrong 
     const value = { ...extraction(), profile: { ...extraction().profile, ...profile } };
     const { client, calls } = scriptedClient([reply(decisions()), reply(completion(value)), reply(completion(value))]);
     await assert.rejects(client.assess(raw, new RefreshBudget(0.25)), /unsupported or invalid hardware fields/);
+    assert.equal(calls.length, 3);
+  }
+});
+
+test('observed multi-price aliases retain verified hardware and require review without a paid retry', async () => {
+  for (const priceBasis of ['multi', 'multiPrice']) {
+    const listing = { ...raw, description: `${raw.description} RTX 3070 8GB also available for 6000000 VND.` };
+    const quote = 'RTX 3070 8GB also available for 6000000 VND.';
+    const value = { ...extraction(), profile: { ...extraction().profile, priceBasis },
+      flags: { ...extraction().flags, multiPrice: true }, conflicts: ['Multiple configurations have different asking prices.'],
+      evidence: [...extraction().evidence, { field: 'priceBasis', quote }, { field: 'multiPrice', quote }] };
+    const { client, calls, receipts } = scriptedClient([reply(decisions()), reply(completion(value))]);
+    const budget = new RefreshBudget(.25), result = await client.assess(listing, budget);
+    assert.equal(result.method, 'ai'); assert.equal(result.profile.priceBasis, 'unknown');
+    assert.equal(result.profile.gpu, 'RTX 3060'); assert.equal(result.profile.vramGb, 12);
+    assert.equal(result.eligibility, 'review'); assert.ok(result.risks.includes('multiPrice'));
+    assert.deepEqual(new Set(result.conflicts), new Set([...value.conflicts, 'Offered configuration or price is ambiguous.']));
+    assert.ok(result.unknowns.includes('Asking-price basis is not established.'));
+    assert.match(result.status, /price basis remains unknown and requires review/);
+    assert.ok(!result.evidence.some(item => item.field === 'priceBasis'));
+    assert.ok(result.evidence.some(item => item.field === 'multiPrice' && item.quote === quote));
+    assert.equal(calls.length, 2); assert.equal(receipts.length, 2);
+    assert.ok(Math.abs(budget.spent - .00084) < 1e-12);
+  }
+});
+
+test('price recovery keeps review even without a multi-price flag and still verifies every hardware quote', async () => {
+  const value = { ...extraction(), profile: { ...extraction().profile, priceBasis: 'multi', vramGb: 24 },
+    evidence: [...extraction().evidence, { field: 'priceBasis', quote: 'Full price 4000000 VND.' }] };
+  const { client } = mockClient(decisions(), completion(value));
+  const result = await client.assess(raw, new RefreshBudget(.25));
+  assert.equal(result.profile.priceBasis, 'unknown'); assert.equal(result.profile.vramGb, null);
+  assert.equal(result.profile.gpu, 'RTX 3060'); assert.equal(result.eligibility, 'review');
+  assert.ok(result.unknowns.includes('Asking-price basis is not established.'));
+  assert.equal(reconcileAssessment(raw, result).eligibility, 'review');
+});
+
+test('multi-price and out-of-range RAM-speed recovery can preserve the same extraction', async () => {
+  const value = { ...extraction(), profile: { ...extraction().profile, priceBasis: 'multiPrice', ramSpeedMhz: 32_000 } };
+  const { client, calls } = scriptedClient([reply(decisions()), reply(completion(value))]);
+  const result = await client.assess(raw, new RefreshBudget(.25));
+  assert.equal(result.profile.priceBasis, 'unknown'); assert.equal(result.profile.ramSpeedMhz, null);
+  assert.equal(result.profile.gpu, 'RTX 3060'); assert.equal(result.eligibility, 'review');
+  assert.match(result.status, /RAM speed was outside/); assert.match(result.status, /price basis remains unknown/);
+  assert.equal(calls.length, 2);
+});
+
+test('price recovery rejects unrecognized values and cannot hide unrelated schema errors', async () => {
+  for (const profile of [
+    { priceBasis: null }, { priceBasis: 'single' }, { priceBasis: {} }, { priceBasis: 'MULTI' },
+    { priceBasis: 'multi', ramGb: 0 }, { priceBasis: 'multiPrice', ramSpeedMhz: '32000' },
+  ]) {
+    const value = { ...extraction(), profile: { ...extraction().profile, ...profile } };
+    const { client, calls } = scriptedClient([reply(decisions()), reply(completion(value)), reply(completion(value))]);
+    await assert.rejects(client.assess(raw, new RefreshBudget(.25)), /unsupported or invalid hardware fields/);
     assert.equal(calls.length, 3);
   }
 });

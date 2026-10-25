@@ -64,6 +64,12 @@ Use the following paths locally; prepend `/admin` on the hosted app.
   Parameters may include `scanLimit` (1–1000), `benchmarkLimit` (20–60),
   `aiBudgetUsd` (0–10), `aiEnabled`, and the existing memory filters. Omitted
   parameters use saved defaults. An empty query refreshes the full category.
+  Starting a run does not save its parameter overrides. The Runs form's explicit
+  Save defaults action sends its seven `RunParameters` fields to `/api/settings`;
+  category and query are not settings. The saved defaults persist across server
+  restarts and apply to new manual/daily runs. Daily AI allowances remain bounded
+  by their category/day ceilings. Existing attempts and resumptions keep their
+  captured parameters.
 - `POST /api/runs/:id/retry` or `/resume` with `{}` continues failed, cancelled,
   interrupted or waiting work under its original scope, AI allowance and spending.
   Source cooldowns remain enforced; quota/proxy availability is rechecked.
@@ -71,7 +77,7 @@ Use the following paths locally; prepend `/admin` on the hosted app.
   recovery, preserving its checkpoint. `POST /api/runs/:id/again` with `{}` starts
   a separate manual run with the same parameters and a fresh allowance.
 - `POST /api/runs/limits` with all five `RunLimits` fields updates
-  `marketplaceWorkers`, `aiWorkers` (each 1–8), `requestLimit`,
+  `marketplaceWorkers`, `aiWorkers` (each 1–20), `requestLimit`,
   `automaticRequestLimit`, and `automaticCategoryRequestLimit` (positive safe
   integers; category ≤ automatic ≤ total). Worker counts apply at the next start
   or resume. Request limits apply to subsequent admissions, including during an
@@ -130,16 +136,21 @@ includes a `cooldown`, `request_budget` or `proxy` reason and optional focused
 `listingId`; raw progress checkpoints are excluded from HTTP responses. Waiting
 work resumes on the server using its recorded AI spending and can be cancelled
 through `POST /api/scan-retries/:id/cancel`. This queue runs independently of the
-daily enable switch. New default bounds are 100 local listings, ten initial
+daily enable switch. New default bounds are 200 local listings, ten initial
 detail reads and at most 60 national offers per query. Settings reject a national
 limit above 60. The private schedule displays quota/proxy waiting states.
 Proxy status also reports `workerLimit`, assigned `workers`, `activeWorkers`,
 `verified` HTTPS routes and the per-worker `intervalMs`. `marketplace.ai` reports
 the separate AI pool's limit and active slots. Jobs report optional
-`configurationsCompleted` and `configurationsTotal`. Both pools default to four slots and support 1–8 through Runs;
+`configurationsCompleted` and `configurationsTotal`. Both pools default to four slots and support 1–20 through Runs;
 marketplace starts are spaced by three seconds per worker and proxy. A shared
 national query serializes pagination, and completed observations/AI spending
 survive partial failures after all started work drains. These fields remain private.
+
+Persistent `scanLimit` accepts the same 1–1000 range as run overrides. Startup
+upgrades an existing saved value of 100 to 200 once, preserving other settings and
+all captured run/recovery parameters. Other existing targets and subsequent saved
+choices, including an explicit return to 100, survive restart.
 
 The default discount threshold is 10%. `Valuation.opportunity` counts only
 complete or component-adjusted whole-item references. `componentOpportunity`

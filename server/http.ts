@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve, extname, sep } from 'node:path';
 import { z } from 'zod';
 import type { AppSettings } from '../shared/types.ts';
+import { MAX_RUN_WORKERS } from '../shared/run-settings.ts';
 import { FlipperService } from './service.ts';
 import { serverOptions, validAdminToken, validateServerAccess, type ServerOptions } from './access.ts';
 import { SourceCooldownError } from './source-cooldown.ts';
@@ -20,7 +21,7 @@ const runParametersSchema = z.object({
   aiBudgetUsd: z.number().finite().min(0).max(10).optional(), aiEnabled: z.boolean().optional(),
 }).strict();
 const runLimitsSchema = z.object({
-  marketplaceWorkers: z.number().int().min(1).max(8), aiWorkers: z.number().int().min(1).max(8),
+  marketplaceWorkers: z.number().int().min(1).max(MAX_RUN_WORKERS), aiWorkers: z.number().int().min(1).max(MAX_RUN_WORKERS),
   requestLimit: z.number().int().positive(), automaticRequestLimit: z.number().int().positive(),
   automaticCategoryRequestLimit: z.number().int().positive(),
 }).strict().superRefine((value, ctx) => {
@@ -33,7 +34,7 @@ const settingsSchema = z.object({
   minProfit: z.number().finite().min(0).max(1e9).optional(), minRoiPercent: z.number().finite().min(0).max(500).optional(),
   resaleFactor: z.number().finite().min(.1).max(1.5).optional(),
   costReserves: z.object({ laptop: z.number().finite().min(0).max(1e8).optional(), desktop: z.number().finite().min(0).max(1e8).optional(), gpu: z.number().finite().min(0).max(1e8).optional() }).strict().optional(),
-  aiBudgetUsd: z.number().finite().min(0).max(10).optional(), scanLimit: z.number().int().min(20).max(1000).optional(),
+  aiBudgetUsd: z.number().finite().min(0).max(10).optional(), scanLimit: z.number().int().min(1).max(1000).optional(),
   benchmarkLimit: z.number().int().min(20).max(60).optional(), aiEnabled: z.boolean().optional(),
   liteLlmKey: z.string().max(500).optional(),
 }).strict();

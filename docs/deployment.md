@@ -123,8 +123,8 @@ the next permitted start, proxy candidates/health and incremental progress persi
 in SQLite. Request exhaustion and unavailable proxies use the same waiting queue
 and preserve its AI spending. Proxy catalogs are fetched lazily from the two
 fixed GitHub providers described in ADR 0009. Marketplace requests use HTTPS with
-certificate verification, four independently paced workers with stable distinct
-proxy IPs, and connection-only failover;
+certificate verification, four independently paced workers by default (configurable
+from 1 to 20) with stable distinct proxy IPs, and connection-only failover;
 there is no direct fallback. LiteLLM and administrator credentials stay outside
 these routes. Existing source cooldowns retain precedence over proxy switching.
 

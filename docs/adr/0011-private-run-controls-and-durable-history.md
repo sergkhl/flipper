@@ -87,3 +87,29 @@ installed speed by adding/removing zeros. Standalone RAM remains in review witho
 its required speed; other schema failures keep the existing retry/fallback policy.
 Repair affected retained evidence and explicitly resume failed work while keeping
 the original attempts and their warnings.
+
+Follow-up accepted 25 October 2026: recover the observed MiMo `priceBasis`
+values `multi` and `multiPrice` as `unknown`, retaining independently validated
+hardware facts and requiring price review. Discard evidence for the rejected
+price basis; retain source-validated multi-price evidence, flags and conflicts.
+Clarify the prompt's supported values and boolean multi-price flag. Other
+schema failures keep their existing bounded retry/fallback policy; an isolated
+RAM-speed range failure can be recovered in the same response. Preserve
+historical run warnings and advance the assessment cache contract.
+
+Add an explicit Save defaults action to the Runs launch form. Persist all seven
+run parameters in the existing server settings; keep category and search text
+specific to the launch. Starting a run alone does not change defaults. New
+manual and daily runs use saved defaults across browser visits and restarts;
+daily AI admission takes the lower of the saved allowance and existing
+category/day ceilings. Existing runs, retries and Run again retain captured
+parameters. Saving defaults uses the ordinary settings admission/maintenance
+rules and preserves operational limits and unrelated settings.
+
+The initial local-listing target becomes 200. Upgrade an existing saved value
+of 100 once; preserve other existing targets and every later explicit choice,
+including 100. Do not rewrite captured runs or recovery records. Raise both
+worker caps to 20 while retaining factory defaults of four and previously saved
+counts. Worker counts still apply at start/resume. Proxy pacing, distinct-route
+requirements and the twelve-candidate check budget remain in force; obtaining
+twenty marketplace routes can depend on previously verified routes.

@@ -4938,6 +4938,7 @@ strong {
 .run-form .run-check { flex-direction: row; align-items: center; }
 .run-form-note { grid-column: 1 / -1; font-size: 13px; color: var(--muted); line-height: 1.7; margin: 0; }
 .run-form button { justify-self: start; }
+.run-form .run-actions { grid-column: 1 / -1; margin: 0; }
 .run-history-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 20px 0 10px; }
 .run-history-heading h2 { margin: 0; font-size: 16px; }
 .run-history-heading > span { font-size: 12px; color: var(--muted); }

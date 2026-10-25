@@ -207,7 +207,7 @@ stops further AI calls immediately. Resumed work retains its original AI allowan
 
 ## Collection and persistence
 
-Full market scans default to **100 recent local listings**. Coverage and source
+Full market scans default to **200 recent local listings**. Coverage and source
 totals are visible, and **Expand scan** allows up to 1,000. A refresh enriches up
 to ten initial promising/unresolved local listings and compares up to 12 distinct eligible
 configurations. Those bounded detail, AI and comparison steps prioritize known
@@ -236,10 +236,17 @@ independent offers exist. Exhausted allowance and unavailable proxies queue unfi
 automatic resumption with its progress and cumulative AI spending intact.
 Overlapping automatic work shares one queue entry and its captured parameters.
 Private **Runs** controls can set marketplace and AI workers independently from
-1 to 8, and change total/automatic/per-category request allowances. Worker changes
+1 to 20, and change total/automatic/per-category request allowances. Worker changes
 apply on the next start or resume; request limits apply to subsequent admissions
 without clearing usage. Run targets, memory filters, comparison bounds and AI
 allowances remain fixed. A new run is needed to change those parameters.
+
+**Save defaults** in the run form persists its listing target, national comparison
+limit, AI allowance/enable switch and memory filters across visits and restarts.
+Future manual and daily runs use these defaults; daily AI admission still caps
+each category at USD 0.25. Starting a run alone uses its edits for that run.
+Category and model search remain launch-specific. Existing installations using
+the old 100-listing default upgrade to 200 once; later saved choices persist.
 
 Public HTTPS marketplace requests use runtime candidates from
 [monosans](https://github.com/monosans/proxy-list) and

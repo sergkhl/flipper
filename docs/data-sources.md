@@ -37,8 +37,11 @@ routes. Source cooldowns and the shared 700-attempt rolling allowance apply
 across routes. Unavailable proxies queue work without a direct fallback.
 Catalog downloads, LiteLLM and administrator traffic do not use these proxies.
 Downloaded lists and cached endpoint/health state remain private runtime data.
-Up to four workers retain distinct proxy IPs, each with at least three seconds
+Four workers by default retain distinct proxy IPs, each with at least three seconds
 between request starts. Bounded HTTPS checks select routes; their success does
 not establish marketplace access. Fewer working routes reduce concurrency rather
-than stopping healthy workers. AI processing uses four separate direct gateway
-slots and the original shared job budget. See ADR 0010.
+than stopping healthy workers. AI processing defaults to four separate direct
+gateway slots and the original shared job budget. Both worker limits are
+independently configurable from 1 to 20. A job checks at most twelve new proxy
+candidates, so larger marketplace pools also depend on cached verified routes.
+See ADRs 0010 and 0011.
