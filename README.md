@@ -4,8 +4,8 @@
 
 Flipper turns used laptops, desktops and graphics-card listings into a searchable
 workspace for personal buying. It compares candidates in Da Nang with matching
-nationwide Chợ Tốt asking prices, then shows the specifications, comparable
-offers and uncertainty behind each reference. The application is
+new laptop retail prices and nationwide used GPU/desktop asking prices, then shows
+the specifications, sources and uncertainty behind each reference. The application is
 [MIT-licensed](LICENSE); phones are outside its current scope.
 
 - [Open the live app](https://flipper.globesoul.com/)
@@ -92,7 +92,7 @@ backups and private deployment configuration are ignored by Git.
    progress banner and daily scans share live updates and reconnect automatically.
    Existing scheduled/recovery snapshots are
    imported; older in-memory manual history is unavailable.
-6. Use **Settings & AI** for memory defaults, price thresholds, optional model
+6. Use **Settings & AI** for memory defaults, price-evidence rules, optional model
    access, and the separate daily-scan controls.
 
 Seller-stated, manufacturer-inferred and possible memory types are labeled
@@ -143,7 +143,20 @@ integration is configured. Operate one server process per data directory.
 
 ## How prices are compared
 
-- The reference is the arithmetic mean of matching nationwide **used asking
+- **Laptops:** compare with the lowest verified factory-new cash offer for the
+  exact configuration, including known VAT and Vietnam delivery. Current new
+  prices are used directly. When a successful current lookup finds none, apply
+  the agreed depreciation curve to a documented original launch price. Unknown
+  configuration/class/release timing and conflicting evidence show an indicative
+  range without a badge. Initial historical coverage includes four 2020 M1
+  MacBook base configurations; unsupported laptops remain unpriced.
+  [ADR 0012](docs/adr/0012-laptop-retail-pricing-and-usd.md) defines the curves.
+- **USD display:** all price displays and maximum-price inputs use one current
+  FX snapshot. Original currency values remain visible in details and unchanged
+  in storage. Current retail prices and FX cache for **seven days** across
+  restarts. Failed lookups do not prove absence; expired FX pauses fresh verdicts.
+
+- **GPUs and desktops:** the reference is the arithmetic mean of matching nationwide **used asking
   prices**, after filtering incompatible models/configurations, unsafe or
   ambiguous offers, the candidate and its seller, repeated sellers/ads, and
   numerical outliers. **Three or four other independent sellers** provide a
@@ -161,12 +174,11 @@ integration is configured. Operate one server process per data directory.
   also prevent matching. Compact `14inch`, `10CPU/16GPU`, `M2Pro` and styled
   seller text are supported; conflicting claims remain in review.
   A mobile or integrated GPU is never assigned a standalone desktop card's price.
-- Computers first use sufficient complete-configuration evidence. Otherwise,
+- Desktops first use sufficient complete-configuration evidence. Otherwise,
   **component-adjusted comparisons** normalize each comparable PC as
   `asking price − removed-part averages + added-part averages`, then average
   the resulting PC prices. Desktops retain the same CPU/platform and can adjust
-  GPU, RAM and SSD. Laptops retain the same model, CPU and mobile GPU; RAM/SSD
-  changes require source-verified replaceability. Parts needed for an adjustment
+  GPU, RAM and SSD. Parts needed for an adjustment
   must have explicit identities and supported independent price pools.
   RAM stick layout, speed, generation, form factor, ECC status and per-stick/bundle
   pricing must be verified when changing RAM. Unchanged RAM needs no invented
@@ -183,14 +195,17 @@ integration is configured. Operate one server process per data directory.
   If a desktop still has no supported complete-PC reference, verified GPU, CPU,
   RAM or SSD values can form a labeled **partial component baseline**. Each part
   needs at least five matching independent offers; omitted parts remain unpriced.
-- Default bargain gate: `(reference − asking) / reference ≥ 10%`, configurable.
+- A good price requires `asking < reference`, for every category. Any amount
+  below qualifies, before display rounding; equality does not. The old 10% gate
+  and discount setting no longer apply.
 - Complete and component-adjusted whole-item references supply **Below-market
   finds**. Partial component baselines have a separate **Below component value**
   label and filter. **Indicative comparisons** have their own view and do not
   receive deal badges.
 - Seller descriptions must be retrieved before a price score is used. Missing
-  or conflicting essential specs need review. References and local asking
-  prices observed more than 24 hours ago do not produce current deal badges.
+  or conflicting essential specs need review. Used-market references and local
+  asking prices older than 24 hours do not produce current deal badges;
+  current retail references and FX instead have seven-day cache lifetimes.
   Ads marked deleted, sold or otherwise unavailable cannot supply a reference
   or opportunity, even if their page still loads. An asking price below 10% of
   the supported reference needs a cash-price check in the review queue.

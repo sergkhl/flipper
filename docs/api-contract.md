@@ -99,7 +99,7 @@ imported when present; legacy in-memory manual history is unavailable.
 ### Existing workspace actions
 
 - `GET /api/bootstrap` → BootstrapResponse.
-- `GET /api/listings?category=laptop|desktop|gpu&q=...&district=...&view=all|saved|review|history|indicative|components&opportunities=true|false&maxPrice=...&minRamGb=...&minVramGb=...&includeUnknownMemory=true|false&sort=value|newest|price` → ListingsResponse. Missing memory parameters use persistent settings defaults (initially RAM 16 GB, VRAM 8 GB, include unknown true). RAM applies only to computers. VRAM applies to standalone GPUs and included discrete graphics; integrated-only and explicitly GPU-free computers are exempt. Minimums are inclusive; zero disables a capacity threshold. The unknown-memory flag independently includes/excludes unknown applicable capacities, including with a zero threshold. Known below-minimum capacity always fails. The policy applies before view selection and statistics. Missing memory capacity alone may stay in the main feed when included, but other review reasons and price-evidence gates remain effective. Collection coverage and scanned count describe the unfiltered pool. Legacy `mode` does not change deal filtering, counts or ranking.
+- `GET /api/listings?category=laptop|desktop|gpu&q=...&district=...&view=all|saved|review|history|indicative|components&opportunities=true|false&maxPrice=...&priceCurrency=VND|USD&minRamGb=...&minVramGb=...&includeUnknownMemory=true|false&sort=value|newest|price` → ListingsResponse. Missing memory parameters use persistent settings defaults (initially RAM 16 GB, VRAM 8 GB, include unknown true). RAM applies only to computers. VRAM applies to standalone GPUs and included discrete graphics; integrated-only and explicitly GPU-free computers are exempt. Minimums are inclusive; zero disables a capacity threshold. The unknown-memory flag independently includes/excludes unknown applicable capacities, including with a zero threshold. Known below-minimum capacity always fails. The policy applies before view selection and statistics. Missing memory capacity alone may stay in the main feed when included, but other review reasons and price-evidence gates remain effective. Collection coverage and scanned count describe the unfiltered pool. Legacy `mode` does not change deal filtering, counts or ranking.
 - `POST /api/refresh` with `{category, query?, limit?, minRamGb?, minVramGb?, includeUnknownMemory?}` → `{job: RefreshJob}`. Omitted memory parameters use settings defaults. Bounded detail/AI and comparison work prioritizes known matches, possible unknown matches, then known failures, with price ordering within groups. Source collection and nationwide reference pools retain their existing bounds and matching rules.
 - `GET /api/jobs/active` → `{job: RefreshJob|null}`.
 - `GET /api/deployment` → `{busy: boolean}`. Private activation readiness; active
@@ -109,7 +109,7 @@ imported when present; legacy in-memory manual history is unavailable.
 - `POST /api/jobs/:id/cancel` → `{job: RefreshJob}`.
 - `GET /api/listings/:id` → ListingDetail.
 - `POST /api/listings/:id/state` with partial ListingState → ListingView.
-- `POST /api/listings/:id/analyze` → `{job: RefreshJob}`. This refreshes the detail and focused nationwide comparisons; poll the job, then reload the listing.
+- `POST /api/listings/:id/analyze` → `{job: RefreshJob}`. This refreshes the detail and focused price evidence (retail for laptops, nationwide used offers for GPUs/desktops); poll the job, then reload the listing.
 - `POST /api/searches` with `{name, category, query, district?, mode?, maxPrice?, minRamGb?, minVramGb?, includeUnknownMemory?, opportunities?}` → `{search: SavedSearch}`. Memory defaults come from settings when omitted. Saved values, including Any (zero) and false for unknown memory, are restored alongside model/district, asking-price cap and deals-only choice. The client saves legacy `mode: buy`; resale mode is absent from the interface.
 - `DELETE /api/searches/:id` → `{ok: true}`.
 - `POST /api/settings` with partial AppSettings, including persistent `minRamGb`, `minVramGb` and `includeUnknownMemory`, optional `liteLlmKey` string (empty removes the locally saved LiteLLM key) → BootstrapResponse. The client immediately applies saved memory defaults to its toolbar. Legacy resale settings remain compatible but have no interface controls. Keys are never returned. `ai.keySource` is `environment`, `local`, or `null`; `LITELLM_API_KEY` takes precedence over a saved key.
@@ -152,14 +152,36 @@ upgrades an existing saved value of 100 to 200 once, preserving other settings a
 all captured run/recovery parameters. Other existing targets and subsequent saved
 choices, including an explicit return to 100, survive restart.
 
-The default discount threshold is 10%. `Valuation.opportunity` counts only
-complete or component-adjusted whole-item references. `componentOpportunity`
-applies the same threshold to a partial component baseline and is excluded from
+The discount rule is strictly `asking < reference`, before display rounding.
+`discountPercent` remains a zero-valued compatibility setting; attempts to set it
+to another value are rejected. `Valuation.opportunity` includes supported laptop
+retail/depreciation and complete or component-adjusted whole-item references. `componentOpportunity`
+applies the same strict comparison to a partial component baseline and is excluded from
 market and resale opportunities. `view=components` selects these separate finds;
-`view=indicative` selects fresh references below the configured evidence minimum,
-with no discount score or badge. Statistics expose `componentOpportunities` and
+`view=indicative` selects references that cannot support a firm verdict. Laptop
+estimates may show a mathematical gap but never a deal badge. Statistics expose `componentOpportunities` and
 `indicative` separately. `evidenceIssue` identifies a missing, sparse, outdated,
 unavailable or ambiguous input for a specific UI explanation.
+
+Bootstrap, listings and detail responses include `fx: FxSnapshot | null` with
+base USD, currency units per USD, provider date, fetch date and source URL.
+Monetary fields in existing listing/reference/history/state APIs remain native
+VND for compatibility. The client converts all displays with this one snapshot;
+retail source records also preserve their own original currencies/amounts.
+`maxPrice` is VND by default; `priceCurrency=USD` explicitly requests a USD budget.
+Saved searches persist `priceCurrency: 'VND' | 'USD'`; untagged older searches
+remain VND and are converted when opened. Without usable FX, a USD price filter
+returns no items and no fresh price verdict is issued.
+
+Laptop `ReferencePrice.kind` is `retail_new` or `historical_depreciation`.
+`retail` contains the basis, policy version, original/estimated USD values, range,
+configuration-specific source records, class/age/retention, lookup status/date,
+indicative reasons and the exact FX snapshot. One verified retail source can
+support medium confidence; `minComparables` remains a GPU/desktop rule. Old
+laptop used-peer references are ignored. New evidence issues `retail_price` and
+`exchange_rate` distinguish missing price provenance from unavailable conversion.
+Ordinary reads resolve from cache without external calls. Collection, analysis
+and bounded background cache maintenance perform retail lookup. See ADR 0012.
 
 Current membership is published after a refresh succeeds. A failed or cancelled
 refresh retains the previous collection. History includes retained local rows

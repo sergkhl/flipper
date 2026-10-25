@@ -19,6 +19,8 @@ import type { RefreshProgress } from '../shared/types.ts';
 import { WorkPool, KeyedWork, concurrent } from './concurrency.ts';
 import { runSummary, runLimits, type StoredRun } from './runs.ts';
 import type { RunActivity, RunParameters, RunsResponse } from '../shared/types.ts';
+import { ExchangeRates } from './price-cache.ts';
+import { LaptopPriceBook } from './laptop-price-book.ts';
 
 const POOL_AGE_MS = 6 * 60 * 60 * 1000;
 const AUTO_COHORTS = 12;
@@ -93,13 +95,15 @@ export class FlipperService {
   private stopping = false;
   private pending = new Set<Promise<unknown>>();
   private probeAbort: AbortController | null = null;
+  private priceAbort: AbortController | null = null;
+  private nextPriceRefresh = 0;
   private shutdownListeners = new Set<() => void>();
   onShutdown(listener: () => void): () => void {
     this.shutdownListeners.add(listener);
     return () => { this.shutdownListeners.delete(listener); };
   }
   constructor(readonly store: Store, source?: Source, private memoryCatalog?: MemoryCatalog,
-    private now: () => Date = () => new Date()) {
+    private now: () => Date = () => new Date(), private prices?: { fx: ExchangeRates; laptops: LaptopPriceBook }) {
     this.source = source ?? new ChototClient({ cooldownStore: store, requestStore: store, proxies: new ProxyPool(store) });
     store.importRunHistory(this.now()); store.interruptRuns(this.now());
   }
@@ -135,7 +139,7 @@ export class FlipperService {
   }
   private marketplaceStatus() { return { requests: this.store.sourceBudgetStatus(this.now()), proxies: this.source.proxyStatus?.() ?? null,
     ai: { limit: this.active?.settings.aiWorkers ?? this.store.getSettings().aiWorkers, active: this.active?.aiGate.running ?? 0 } }; }
-  bootstrap(): AdminBootstrapResponse { return { access: 'admin', settings: this.store.getSettings(), ai: this.aiStatus(), schedule: this.scheduleStatus(), searches: this.store.searches(), counts: this.store.counts(), marketplace: this.marketplaceStatus() }; }
+  bootstrap(): AdminBootstrapResponse { return { access: 'admin', fx:this.prices?.fx.snapshot() ?? null, settings: this.store.getSettings(), ai: this.aiStatus(), schedule: this.scheduleStatus(), searches: this.store.searches(), counts: this.store.counts(), marketplace: this.marketplaceStatus() }; }
   scheduleStatus(now = this.now()) { return { ...dailyScanStatus(this.store, this.activeJob(), this.deploymentStatus().busy, now), marketplace: this.marketplaceStatus() }; }
   configureDailyScans(enabled: boolean, now = this.now()) {
     this.ensureWorkAllowed(); this.store.configureDailyScans(enabled, now); return this.scheduleStatus(now);
@@ -170,7 +174,7 @@ export class FlipperService {
     return { minRamGb, minVramGb, includeUnknownMemory, discountPercent, minComparables };
   }
   publicBootstrap(): PublicBootstrapResponse {
-    return { access: 'read-only', settings: this.publicSettings(), ai: null, searches: [], counts: this.store.counts() };
+    return { access: 'read-only', fx:this.prices?.fx.snapshot() ?? null, settings: this.publicSettings(), ai: null, searches: [], counts: this.store.counts() };
   }
   private prepared(listing: StoredListing): StoredListing {
     const assessment = this.memoryAssessment(listing.raw, listing.assessment);
@@ -187,7 +191,12 @@ export class FlipperService {
   }
   private preparedView(listing: StoredListing, readOnly: boolean, settings: AppSettings): ListingView {
     const state = readOnly ? { ...EMPTY_STATE } : listing.state;
-    const valuation = valueListing(listing.raw, listing.assessment, listing.reference, settings, state, listing.reason);
+    const retail = listing.assessment.kind === 'laptop' ? this.prices?.laptops.reference(listing.assessment.profile,this.prices.fx.snapshot()) : null;
+    let valuation = valueListing(listing.raw, listing.assessment, listing.assessment.kind === 'laptop' ? retail?.reference ?? null : listing.reference,
+      settings, state, retail?.reason ?? listing.reason);
+    if (this.prices && !this.prices.fx.snapshot() && valuation.status !== 'excluded') valuation = { ...valuation,
+      status:'insufficient_evidence', opportunity:false, componentOpportunity:false, resaleOpportunity:false, discountPercent:null,
+      evidenceIssue:'exchange_rate', reason:'A current USD exchange-rate snapshot is unavailable; price verdicts are paused.' };
     if (!readOnly) return { ...listing.raw, assessment: listing.assessment, state, valuation };
     return { ...listing.raw,
       attributes: Object.fromEntries(Object.entries(listing.raw.attributes).filter(([key]) => !key.startsWith('_'))),
@@ -195,10 +204,10 @@ export class FlipperService {
       valuation: { ...valuation, costReserve: 0, expectedResale: null, profit: null, roiPercent: null, resaleOpportunity: false } };
   }
   detail(id: string): ListingDetail | null {
-    const item = this.store.getListing(id); return item ? { ...this.view(item), history: this.store.history(id) } : null;
+    const item = this.store.getListing(id); return item ? { ...this.view(item), fx:this.prices?.fx.snapshot() ?? null, history: this.store.history(id) } : null;
   }
   publicDetail(id: string): ListingDetail | null {
-    const item = this.store.getListing(id); return item ? { ...this.view(item, true), history: this.store.history(id) } : null;
+    const item = this.store.getListing(id); return item ? { ...this.view(item, true), fx:this.prices?.fx.snapshot() ?? null, history: this.store.history(id) } : null;
   }
   state(id: string, updates: Partial<ListingState>): ListingView | null {
     const item = this.store.setState(id, updates); return item ? this.view(item) : null;
@@ -243,7 +252,11 @@ export class FlipperService {
     if (view === 'indicative') items = items.filter(item => item.valuation.status === 'indicative');
     if (view === 'components') items = items.filter(item => item.valuation.componentOpportunity);
     const district = params.get('district'); if (district) items = items.filter((item) => item.district === district);
-    const maxPrice = Number(params.get('maxPrice')); if (maxPrice > 0) items = items.filter((item) => item.price <= maxPrice);
+    const maxPrice = Number(params.get('maxPrice'));
+    if (maxPrice > 0) {
+      const rate = params.get('priceCurrency') === 'USD' ? this.prices?.fx.snapshot()?.rates.VND : 1;
+      items = rate ? items.filter(item => item.price <= maxPrice*rate) : [];
+    }
     if (params.get('opportunities') === 'true') items = items.filter((item) => item.valuation.opportunity);
     const sort = params.get('sort');
     items.sort(sort === 'price' ? (a,b) => a.price-b.price : sort === 'newest' ? (a,b) => b.observedAt.localeCompare(a.observedAt)
@@ -253,11 +266,33 @@ export class FlipperService {
     const coverage: Coverage | null = readOnly ? pool.length ? { category, query, scanned: pool.length, limit: pool.length,
       totalAvailable: null, completedAt: pool.reduce((latest, row) => row.raw.observedAt > latest ? row.raw.observedAt : latest, ''),
       error: null, requestCount: 0 } : null : this.store.coverage(category, query);
-    return { items, total: items.length, stats, districts, coverage,
+    return { items, total: items.length, stats, districts, coverage, fx:this.prices?.fx.snapshot() ?? null,
       job: readOnly ? null : this.active?.job ?? null, ai: readOnly ? null : this.aiStatus() };
   }
   activeJob(): RefreshJob | null { return this.active?.job ?? null; }
-  deploymentStatus(): { busy: boolean } { return { busy: !!this.active || this.aiProbeRunning }; }
+  deploymentStatus(): { busy: boolean } { return { busy: !!this.active || this.aiProbeRunning || !!this.priceAbort }; }
+  /** Background cache maintenance uses no Chợ Tốt or AI requests. Public reads remain offline. */
+  refreshPriceCache(): Promise<void> {
+    if (!this.prices || this.stopping || this.deploymentStatus().busy || this.store.deploymentMaintenanceActive()
+      || this.now().valueOf() < this.nextPriceRefresh) return Promise.resolve();
+    this.priceAbort = new AbortController();
+    const signal = AbortSignal.any([this.priceAbort.signal,AbortSignal.timeout(120_000)]);
+    const work = async () => {
+      try {
+        await this.prices!.fx.warm(signal);
+        const profiles = new Map<string,HardwareProfile>();
+        for (const row of this.store.marketListings('laptop')) {
+          const a = this.prepared(row).assessment;
+          if (a.eligibility !== 'excluded' && a.profile.model) profiles.set(JSON.stringify(a.profile),a.profile);
+        }
+        const selected = [...profiles.values()].sort((a,b) =>
+          (this.prices!.laptops.lookup(a)?.checkedAt ?? '').localeCompare(this.prices!.laptops.lookup(b)?.checkedAt ?? '')).slice(0,12);
+        await concurrent(selected,2,p => this.prices!.laptops.warm(p,signal));
+      } catch { /* Each provider retains its own failure state; retry on the next maintenance tick. */ }
+      finally { this.nextPriceRefresh = this.now().valueOf()+15*60_000; this.priceAbort = null; this.store.notifyActivity(); }
+    };
+    return this.track(work());
+  }
   getJob(id: string): RefreshJob | null {
     const queued = this.store.scanRetries().find(retry => retry.originalJobId === id || retry.job.id === id);
     return queued && queued.status !== 'running' ? queued.status === 'waiting'
@@ -328,6 +363,7 @@ export class FlipperService {
   private ensureWorkAllowed(): void {
     if (this.stopping) throw new Error('Application is stopping; try again after it restarts');
     if (this.store.deploymentMaintenanceActive()) throw new Error('Deployment is in progress; try again shortly');
+    if (this.priceAbort) throw new Error('Retail price cache is refreshing; try again shortly');
   }
   private track<T>(work: Promise<T>): Promise<T> {
     this.pending.add(work);
@@ -338,7 +374,7 @@ export class FlipperService {
     this.stopping = true;
     for (const listener of this.shutdownListeners) listener();
     this.shutdownListeners.clear();
-    this.active?.abort.abort(); this.probeAbort?.abort();
+    this.active?.abort.abort(); this.probeAbort?.abort(); this.priceAbort?.abort();
     await Promise.allSettled([...this.pending]);
     await this.source.close?.();
   }
@@ -390,7 +426,7 @@ export class FlipperService {
   }
   /** Claims only after the shared job/probe/maintenance gate, with no await gap. */
   tryStartDailyRefresh(now = this.now()): RefreshJob | null {
-    if (this.stopping || this.active || this.aiProbeRunning || this.store.deploymentMaintenanceActive()) return null;
+    if (this.stopping || this.active || this.aiProbeRunning || this.priceAbort || this.store.deploymentMaintenanceActive()) return null;
     if (activeCooldown(this.store.sourceCooldown(), now)) return null;
     const recovery = this.store.claimScanRetry(now);
     if (recovery) {
@@ -568,6 +604,7 @@ export class FlipperService {
     }
     job.scanned = gathered.size; job.assessed = progress.assessedIds.length; job.benchmarked = progress.comparedIds.length;
     try {
+      if (this.prices) await this.prices.fx.warm(context.abort.signal);
       let page = progress.nextPage;
       while (!progress.collected && gathered.size < job.target) {
         this.checkWork(context); this.countRequest(context);
@@ -607,7 +644,7 @@ export class FlipperService {
       for (const listing of [...gathered.keys()].map(id => this.prepared(this.store.getListing(id)!)).sort((a,b) =>
         memoryPriority(job.category, a.assessment.profile, context.memory) - memoryPriority(job.category, b.assessment.profile, context.memory)
         || a.raw.price-b.raw.price)) {
-        if (listing.assessment.eligibility !== 'eligible' || sourceUnavailable(listing.raw)) continue;
+        if ((listing.assessment.eligibility !== 'eligible' && !(listing.assessment.kind === 'laptop' && listing.assessment.eligibility !== 'excluded' && listing.assessment.profile.model)) || sourceUnavailable(listing.raw)) continue;
         const c = listing.assessment.computer;
         const key = `${profileKey(listing.assessment.profile, listing.assessment.kind)}:${JSON.stringify([c?.formFactor, c?.cpuCount, c?.ramEcc, c?.ramReplaceable, c?.storageReplaceable])}`;
         if (progress.comparedIds.includes(listing.raw.id)) completedConfigurations.add(key);
@@ -645,6 +682,7 @@ export class FlipperService {
   }
   private async runFocused(context: JobContext, listing: StoredListing): Promise<void> {
     try {
+      if (this.prices) await this.prices.fx.warm(context.abort.signal);
       const canResume = context.progress.assessedIds.includes(listing.raw.id)
         && Date.now() - Date.parse(listing.raw.observedAt) < 24 * 60 * 60_000;
       const raw = canResume ? listing.raw : await this.enriched(listing.raw, context, true); context.job.scanned = 1;
@@ -653,8 +691,8 @@ export class FlipperService {
       const updated = this.store.putListing(raw, assessment, listing.local); context.job.assessed = 1;
       context.progress.raws = [raw]; context.progress.assessedIds = [raw.id];
       this.checkpoint(context);
-      if (assessment.eligibility === 'eligible') {
-        context.job.status = 'comparing'; context.job.message = 'Retrieving focused nationwide price evidence';
+      if (assessment.eligibility === 'eligible' || assessment.kind === 'laptop' && assessment.eligibility !== 'excluded' && assessment.profile.model) {
+        context.job.status = 'comparing'; context.job.message = assessment.kind === 'laptop' ? 'Checking new retail and original launch prices' : 'Retrieving focused nationwide price evidence';
         this.checkpoint(context);
         await this.benchmark([updated], context);
       }
@@ -799,18 +837,29 @@ export class FlipperService {
         const assessment = await this.assessed(raw, context);
         member = this.store.putListing(raw, assessment, member.local);
       }
-      if (member.assessment.eligibility === 'eligible' && !sourceUnavailable(member.raw) && member.raw.description.trim()) verified.push(member);
+      if ((member.assessment.eligibility === 'eligible' || member.assessment.kind === 'laptop' && member.assessment.eligibility !== 'excluded' && member.assessment.profile.model)
+        && !sourceUnavailable(member.raw) && member.raw.description.trim()) verified.push(member);
     });
     const order = new Map(members.map((member, index) => [member.raw.id, index]));
     verified.sort((a,b) => order.get(a.raw.id)! - order.get(b.raw.id)!);
     if (!verified.length) return;
     const target = verified[0]!, kind = target.assessment.kind;
+    if (kind === 'laptop') {
+      for (const member of verified) {
+        await this.prices?.laptops.warm(member.assessment.profile,context.abort.signal);
+        const result = this.prices?.laptops.reference(member.assessment.profile,this.prices.fx.snapshot());
+        this.store.setAssessment(member.raw.id,member.assessment);
+        this.store.setReference(member.raw.id,result?.reference ?? null,result?.reason ?? 'Retail price sources are not configured');
+        context.job.benchmarked++;
+      }
+      return;
+    }
     const query = this.searchQuery(kind, target);
     if (!query) { for (const item of members) this.store.setReference(item.raw.id, null, 'No reliable model or component search can be constructed'); return; }
     const peers = await this.collectPool(kind, query, target, context);
     const components: Partial<Record<'gpu'|'ram'|'cpu'|'ssd', AssessedListing[]>> = {};
     const direct = buildReference(target.raw, target.assessment, peers, context.settings).reference;
-    if ((kind === 'desktop' || kind === 'laptop') && (!direct || direct.sampleCount < Math.max(5, context.settings.minComparables))) {
+    if (kind === 'desktop' && (!direct || direct.sampleCount < Math.max(5, context.settings.minComparables))) {
       const requests = new Map<string, { kind: 'gpu'|'ram'|'ssd'; profile: HardwareProfile; query: string; uses: number }>();
       for (const peer of peers.filter((item) => item.raw.id !== target.raw.id && item.raw.sellerId !== target.raw.sellerId
         && item.raw.condition === 'used' && item.raw.description.trim() && item.assessment.eligibility === 'eligible')

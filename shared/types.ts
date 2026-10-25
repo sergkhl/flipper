@@ -1,3 +1,4 @@
+import type { FxSnapshot, LaptopPriceEvidence } from './retail.ts';
 export type Category = 'laptop' | 'desktop' | 'gpu';
 export type HardwareKind = Category | 'ram' | 'cpu' | 'ssd' | 'other' | 'wanted';
 export type Condition = 'used' | 'new' | 'repaired' | 'unknown';
@@ -161,7 +162,8 @@ export interface AdjustedComparable extends ComparableOffer {
 }
 export interface ReferencePrice {
   policyVersion?: number;
-  kind: 'model' | 'configuration' | 'component_floor' | 'adjusted_configuration';
+  kind: 'model' | 'configuration' | 'component_floor' | 'adjusted_configuration' | 'retail_new' | 'historical_depreciation';
+  retail?: LaptopPriceEvidence;
   label: string;
   average: number;
   offers: ComparableOffer[];
@@ -192,7 +194,7 @@ export interface Valuation {
   maxBuyPrice: number | null;
   missingDetails?: string[];
   evidenceIssue?: 'not_compared' | 'insufficient_offers' | 'configuration' | 'unavailable'
-    | 'outdated_policy' | 'missing_description' | 'stale_listing' | 'stale_reference' | 'unverified_price';
+    | 'outdated_policy' | 'missing_description' | 'stale_listing' | 'stale_reference' | 'unverified_price' | 'exchange_rate' | 'retail_price';
 }
 export interface ListingState {
   saved: boolean;
@@ -244,6 +246,7 @@ export interface SavedSearch {
   district: string;
   mode: 'buy' | 'resale';
   maxPrice?: number | null;
+  priceCurrency?: 'VND' | 'USD';
   minRamGb?: number;
   minVramGb?: number;
   includeUnknownMemory?: boolean;
@@ -311,6 +314,7 @@ export interface RunActivity {
   job: RefreshJob | null;
 }
 export interface ListingsResponse {
+  fx?: FxSnapshot | null;
   items: ListingView[];
   total: number;
   stats: { scanned: number; benchmarked: number; opportunities: number; componentOpportunities: number; indicative: number; saved: number; excluded: number; };
@@ -320,6 +324,7 @@ export interface ListingsResponse {
   ai: AIStatus | null;
 }
 export interface AdminBootstrapResponse {
+  fx?: FxSnapshot | null;
   access: 'admin';
   settings: AppSettings;
   ai: AIStatus;
@@ -329,6 +334,7 @@ export interface AdminBootstrapResponse {
   marketplace?: MarketplaceStatus;
 }
 export interface PublicBootstrapResponse {
+  fx?: FxSnapshot | null;
   access: 'read-only';
   settings: PublicSettings;
   ai: null;
@@ -336,7 +342,7 @@ export interface PublicBootstrapResponse {
   counts: Record<Category, number>;
 }
 export type BootstrapResponse = AdminBootstrapResponse | PublicBootstrapResponse;
-export interface ListingDetail extends ListingView { history: { at: string; price: number }[]; }
+export interface ListingDetail extends ListingView { fx?: FxSnapshot | null; history: { at: string; price: number }[]; }
 
 export interface DailyScanControl { enabled: boolean; firstDueAt: string | null; }
 export interface SourceCooldown {

@@ -10,6 +10,8 @@ const issueLabels: Record<NonNullable<Valuation['evidenceIssue']>, string> = {
   stale_listing: 'Asking price out of date',
   stale_reference: 'Comparison out of date',
   unverified_price: 'Verify the asking price',
+  exchange_rate: 'Exchange rate unavailable',
+  retail_price: 'Retail price evidence needed',
 };
 
 export function evidenceLabel(value: Valuation): string {

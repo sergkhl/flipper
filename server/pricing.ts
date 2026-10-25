@@ -1,6 +1,8 @@
 import type { AdjustedComparable, AppSettings, Assessment, Category, ComparableOffer, ComponentAdjustment, ComponentReference, HardwareKind, HardwareProfile, ListingState, RawListing, ReferencePrice, Valuation } from '../shared/types.ts';
 import { normalize, sourceUnavailable } from './hardware.ts';
 import { enrichComputerAssessment, expandPricedConfigurations } from './computer.ts';
+import { freshDate, validFx } from '../shared/retail.ts';
+import { LAPTOP_PRICE_POLICY } from './laptop-pricing.ts';
 
 export interface AssessedListing { raw: RawListing; assessment: Assessment; }
 export interface ReferenceResult { reference: ReferencePrice | null; reason: string; matched: number; }
@@ -487,14 +489,33 @@ export function valueListing(raw: RawListing, assessment: Assessment, reference:
     ...(missing.length ? { missingDetails: missing } : {}) };
   if (sourceUnavailable(raw)) return { ...empty, status: 'needs_review', evidenceIssue: 'unavailable', reason: 'The original listing is no longer available; its last observed price is retained in history' };
   if (assessment.eligibility === 'excluded') return { ...empty, status: 'excluded', reason: assessment.risks.join('; ') || 'Excluded from working used items' };
-  if (!raw.sellerId) return { ...empty, status:'needs_review', evidenceIssue: 'configuration', reason:'The candidate seller cannot be identified, so own-seller offers cannot be excluded from a reference' };
+  if (!raw.sellerId) return { ...empty, status:'needs_review', evidenceIssue:'configuration', reason:'Seller identity is missing; verify this listing before using a price verdict.' };
+  if (assessment.kind === 'laptop') {
+    const retail = reference?.retail;
+    if (!retail || retail.policyVersion !== LAPTOP_PRICE_POLICY) return { ...empty, evidenceIssue: 'retail_price',
+      reason: reference ? 'Analyze this laptop to replace its old used-market comparison with retail price evidence.' : reason };
+    if (!validFx(retail.fx)) return { ...empty, evidenceIssue:'exchange_rate', reason:'The USD exchange-rate snapshot has expired; refresh before comparing prices.' };
+    const askingUsd = raw.price/retail.fx.rates.VND;
+    const discountPercent = (retail.referenceUsd-askingUsd)/retail.referenceUsd*100;
+    const indicative = (reason: string, evidenceIssue?: Valuation['evidenceIssue']): Valuation => ({ ...empty, status:'indicative', reference,
+      reason, evidenceIssue, discountPercent:Number.isFinite(raw.price) && raw.price > 0 ? discountPercent : null });
+    if (retail.indicative || assessment.eligibility !== 'eligible' || assessment.conflicts.length || !Number.isFinite(raw.price) || raw.price <= 0) {
+      return indicative([...retail.reasons,...assessment.conflicts,...assessment.unknowns].join(' ') || 'Configuration needs review','configuration');
+    }
+    if (!raw.description.trim() || raw.attributes._detailError) return indicative('Retrieve the full seller description before using a price verdict.','missing_description');
+    if (freshnessInvalid(raw.observedAt,Date.now())) return indicative('The asking price is older than 24 hours; refresh it before using a verdict.','stale_listing');
+    if (retail.basis === 'current_new' && retail.sources.some(source => !freshDate(source.observedAt))
+      || retail.basis === 'historical_depreciation' && (!retail.checkedAt || !freshDate(retail.checkedAt) || retail.lookupStatus !== 'complete')) {
+      return indicative('Refresh the seven-day retail evidence before using a verdict.','stale_reference');
+    }
+    if (raw.price < reference.average*.1) return indicative('Verify the full cash asking price; it is below 10% of the supported reference.','unverified_price');
+    return { ...empty, status:'valued', reference, discountPercent, opportunity:askingUsd < retail.referenceUsd,
+      confidence:'medium', evidenceIssue:undefined, maxBuyPrice:reference.average,
+      reason:`${retail.basis === 'current_new' ? 'Compared with new retail' : 'Compared with a depreciation estimate'}. Working-used condition assumed; battery health and wear are unverified.` };
+  }
   if (assessment.eligibility === 'review' || assessment.conflicts.length || !Number.isFinite(raw.price) || raw.price <= 0) return { ...empty, status: 'needs_review', evidenceIssue: 'configuration', reason: [...assessment.conflicts, ...assessment.unknowns, ...assessment.risks].join('; ') || 'Configuration needs review' };
   if (assessment.kind === 'gpu' && (assessment.profile.quantity !== 1 || assessment.profile.priceBasis === 'bundle')) return { ...empty, status:'needs_review', evidenceIssue: 'unverified_price', reason:'The asking price for one graphics card must be verified before comparing prices' };
   if (/^(?:GT 730|GT 1030|GTX 1650)$/.test(assessment.profile.gpu ?? '') && !assessment.profile.gpuMemoryType) return { ...empty, status:'needs_review', evidenceIssue: 'configuration', reason:'The GPU memory-generation variant must be verified before comparing prices' };
-  if (assessment.kind === 'laptop' && (macFamily(assessment.profile) || appleSilicon(assessment.profile))) {
-    const mismatch = laptopIdentityMismatch(assessment.profile, assessment.profile);
-    if (mismatch) return { ...empty, evidenceIssue: 'configuration', reason: mismatch };
-  }
   if (!reference) return empty;
   if (reference.policyVersion !== REFERENCE_POLICY_VERSION) return { ...empty, evidenceIssue: 'outdated_policy', reason:'Refresh this evidence to apply the current memory-type and configuration checks.' };
   if (!raw.description.trim() || raw.attributes._detailError) return { ...empty, status: 'needs_review', evidenceIssue: 'missing_description', reason: 'Retrieve the complete seller description before using a price score. Choose Analyze to check condition and cash-price details.' };
@@ -513,7 +534,7 @@ export function valueListing(raw: RawListing, assessment: Assessment, reference:
   const discountPercent = (reference.average - raw.price) / reference.average * 100;
   const profit = expectedResale - raw.price - costReserve;
   const roiPercent = profit / (raw.price + costReserve) * 100;
-  const meetsThreshold = discountPercent + 1e-9 >= settings.discountPercent;
+  const meetsThreshold = raw.price < reference.average;
   const componentOpportunity = reference.kind === 'component_floor' && meetsThreshold;
   const opportunity = reference.kind !== 'component_floor' && meetsThreshold;
   const resaleOpportunity = opportunity && profit >= settings.minProfit && roiPercent + 1e-9 >= settings.minRoiPercent;
@@ -522,6 +543,6 @@ export function valueListing(raw: RawListing, assessment: Assessment, reference:
       : reference.kind !== 'adjusted_configuration' && reference.sampleCount >= 10 && assessment.confidence >= 0.8 ? 'high' : 'medium',
     reason: reference.kind === 'component_floor' ? 'Discount against a partial component baseline; inspect omitted parts and condition'
       : `${reason}${missing.length ? ` Missing details: ${missing.join(', ')}. Scoring is allowed with reduced confidence.` : ''}`,
-    costReserve, expectedResale, maxBuyPrice: Math.floor(reference.average * (1 - settings.discountPercent / 100)),
+    costReserve, expectedResale, maxBuyPrice: reference.average,
     ...(missing.length ? { missingDetails: missing } : {}) };
 }

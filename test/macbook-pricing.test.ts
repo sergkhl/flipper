@@ -26,7 +26,7 @@ function peers(profile = macProfile()) {
   return Array.from({ length: 5 }, (_, i) => laptop(`peer-${i}`, 25_000_000, profile));
 }
 
-test('same MacBook family, screen, exact chip and GPU bin establish a scored configuration reference', () => {
+test('retained exact used MacBook comparisons cannot supply a retail verdict after the policy cutover', () => {
   const candidate = laptop('candidate', 20_000_000);
   const result = buildReference(candidate.raw, candidate.assessment, peers(), DEFAULT_SETTINGS);
   assert.equal(result.reference?.kind, 'model');
@@ -34,8 +34,9 @@ test('same MacBook family, screen, exact chip and GPU bin establish a scored con
   assert.equal(result.reference?.sampleCount, 5);
   assert.equal(result.reference?.policyVersion, 5);
   const value = valueListing(candidate.raw, candidate.assessment, result.reference, DEFAULT_SETTINGS, EMPTY_STATE);
-  assert.equal(value.opportunity, true);
-  assert.equal(value.discountPercent, 20);
+  assert.equal(value.opportunity, false);
+  assert.equal(value.discountPercent, null);
+  assert.equal(value.evidenceIssue, 'retail_price');
 });
 
 test('MacBook nominal screens match their known actual diagonal and structured fields support legacy names', () => {
@@ -77,7 +78,7 @@ test('legacy Apple profiles without a known screen cannot inherit a reference fr
   const reference = buildReference(knownCandidate.raw, knownCandidate.assessment, peers(), DEFAULT_SETTINGS).reference!;
   const value = valueListing(candidate.raw, candidate.assessment, reference, DEFAULT_SETTINGS, EMPTY_STATE);
   assert.equal(value.opportunity, false);
-  assert.match(value.reason, /screen size/i);
+  assert.equal(value.evidenceIssue, 'retail_price');
 });
 
 test('MacBook family, screen, chip tier, GPU bin, known CPU core count and known model year never cross', () => {

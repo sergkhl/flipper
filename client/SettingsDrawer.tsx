@@ -105,22 +105,13 @@ export default function SettingsDrawer({
             <span className="badge">Recalculates saved data</span>
           </div>
           <p className="section-caption">
-            Deal badges use fetched nationwide prices. These settings change the
-            gates, not the source evidence.
+            Any asking price strictly below its supported reference qualifies as a good price.
+            Laptop references use new retail or historical depreciation. GPUs and desktops use nationwide used offers.
           </p>
           <div className="settings-grid">
             <NumberField
-              label="Minimum discount"
-              unit="% below average"
-              value={draft.discountPercent}
-              min={1}
-              max={90}
-              step={1}
-              onChange={(value) => update("discountPercent", value)}
-            />
-            <NumberField
               label="Minimum comparables"
-              unit="Independent sellers · at least 5"
+              unit="GPU/desktop sellers · at least 5"
               value={draft.minComparables}
               min={5}
               max={50}
@@ -360,7 +351,7 @@ export default function SettingsDrawer({
           <p className="section-caption">
             Each refresh scans recent Da Nang listings in the selected category
             or query. It enriches 10 initial local ads, verifies descriptions for priced candidates, and compares
-            up to 12 distinct configurations, using up to {draft.benchmarkLimit}{" "}
+            up to 12 distinct configurations. Laptops use retail sources; GPUs and desktops use up to {draft.benchmarkLimit}{" "}
             nationwide offers per query, stopping once enough independent matching offers support the comparison. Open any listing and choose “Refresh
             this evidence” for a focused comparison. You can expand the local
             scan from the feed.

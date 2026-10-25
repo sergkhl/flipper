@@ -1,4 +1,12 @@
 import type { Category, RefreshJob } from "../shared/types";
+import { validFx, type FxSnapshot } from '../shared/retail';
+
+let exchangeRates: FxSnapshot | null = null;
+export function setExchangeRates(value: FxSnapshot | null): void { exchangeRates = validFx(value) ? value : null; }
+export function vndToUsd(value: number): number | null { return validFx(exchangeRates) ? value / exchangeRates.rates.VND : null; }
+export function originalMoney(value: number, currency = 'VND'): string {
+  return new Intl.NumberFormat('en-US',{style:'currency',currency,maximumFractionDigits:currency === 'VND' ? 0 : 2}).format(value);
+}
 
 export const categoryLabels: Record<Category, string> = {
   laptop: "Laptops",
@@ -10,19 +18,11 @@ export const categorySingular: Record<Category, string> = {
   desktop: "desktop",
   gpu: "GPU",
 };
-const moneyFormatter = new Intl.NumberFormat("en-US", {
-  maximumFractionDigits: 0,
-});
 export function money(value: number | null | undefined): string {
-  return value === null || value === undefined || !Number.isFinite(value)
-    ? "—"
-    : `₫${moneyFormatter.format(Math.round(value))}`;
+  const converted = value == null || !Number.isFinite(value) ? null : vndToUsd(value);
+  return converted === null ? '—' : originalMoney(converted,'USD');
 }
 export function compactMoney(value: number): string {
-  if (value >= 1_000_000)
-    return `₫${(value / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 2 })}m`;
-  if (value >= 1_000)
-    return `₫${(value / 1_000).toLocaleString("en-US", { maximumFractionDigits: 0 })}k`;
   return money(value);
 }
 export function usd(value: number): string {

@@ -264,7 +264,7 @@ test('workspace navigation cookies allow an explicit public view and cannot auth
 test('hosted administrative writes require exact origin and reject cross-site metadata while token-authenticated CLI writes work', async (t) => {
   const { base, store } = await httpFixture(t);
   const write = (headers: Record<string, string>) => fetch(base + '/admin/api/settings', {
-    method: 'POST', headers: { ...adminHeaders, 'content-type': 'application/json', ...headers }, body: '{"discountPercent":21}',
+    method: 'POST', headers: { ...adminHeaders, 'content-type': 'application/json', ...headers }, body: '{"minComparables":21}',
   });
   for (const external of ['http://flipper.example.test', origin + '/', origin + ':443', 'https://flipper.example.test.evil.test',
     'https://elsewhere.test', 'null', 'not an origin']) {
@@ -272,10 +272,10 @@ test('hosted administrative writes require exact origin and reject cross-site me
   }
   assert.equal((await write({ origin, 'sec-fetch-site': 'cross-site' })).status, 403);
   assert.equal((await write({ 'sec-fetch-site': 'cross-site' })).status, 403);
-  assert.equal(store.getSettings().discountPercent, 10, 'rejected writes leave settings unchanged');
+  assert.equal(store.getSettings().minComparables, 5, 'rejected writes leave settings unchanged');
   assert.equal((await write({ origin, 'sec-fetch-site': 'same-origin' })).status, 200);
   assert.equal((await write({})).status, 200, 'trusted proxy token supports explicit command-line administration');
-  assert.equal(store.getSettings().discountPercent, 21);
+  assert.equal(store.getSettings().minComparables, 21);
 });
 
 test('ambiguous URL encodings, traversal, prefix confusion and token spoofing cannot reach administrator APIs', async (t) => {
@@ -291,12 +291,12 @@ test('ambiguous URL encodings, traversal, prefix confusion and token spoofing ca
           let text = ''; res.setEncoding('utf8'); res.on('data', (chunk) => { text += chunk; });
           res.on('end', () => resolve({ status: res.statusCode!, text }));
         });
-        req.on('error', reject); req.end('{"discountPercent":33}');
+        req.on('error', reject); req.end('{"minComparables":33}');
       });
       assert.ok([400, 403, 404, 405].includes(result.status), `${path} with token=${withToken}: ${result.status}`);
     }
   }
-  assert.equal(store.getSettings().discountPercent, 10);
+  assert.equal(store.getSettings().minComparables, 5);
 });
 
 test('unexpected public errors hide provider diagnostics, and local unrestricted loopback behavior remains compatible', async (t) => {
@@ -310,7 +310,7 @@ test('unexpected public errors hide provider diagnostics, and local unrestricted
   const localBase = `http://127.0.0.1:${(local.address() as AddressInfo).port}`;
   assert.equal((await (await fetch(localBase + '/api/bootstrap')).json() as BootstrapResponse).access, 'admin');
   const update = (headers: Record<string, string>) => fetch(localBase + '/api/settings', { method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers }, body: '{"discountPercent":22}' });
+    headers: { 'content-type': 'application/json', ...headers }, body: '{"minComparables":22}' });
   assert.equal((await update({ origin: 'http://localhost:5173' })).status, 200);
   assert.equal((await update({ origin: 'https://outside.example.test' })).status, 403);
   assert.equal((await update({ 'sec-fetch-site': 'cross-site' })).status, 403);
