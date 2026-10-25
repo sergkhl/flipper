@@ -488,6 +488,51 @@ test('a corrected zero capacity retries only extraction and preserves both paid 
   assert.ok(Math.abs(budget.spent - 0.00164) < 1e-12);
 });
 
+test('an out-of-range RAM speed leaves supported hardware intact without guessing a zero correction', async () => {
+  const listing = { ...raw, category: 'desktop' as const,
+    description: `${raw.description} RAM DDR4 16GB 32000MHz.` };
+  const value = { ...extraction(), kind: 'desktop', profile: { ...extraction().profile, ramGb: 16, ramType: 'DDR4', ramSpeedMhz: 32_000 },
+    evidence: [...extraction().evidence, { field: 'ramGb', quote: '16GB' }, { field: 'ramType', quote: 'DDR4' }, { field: 'ramSpeedMhz', quote: '32000MHz' }] };
+  const { client, calls, receipts } = scriptedClient([reply(decisions('desktop')), reply(completion(value)), reply(completion(value))]);
+  const budget = new RefreshBudget(0.25), result = await client.assess(listing, budget);
+  assert.equal(result.method, 'ai'); assert.equal(result.profile.ramSpeedMhz, null);
+  assert.equal(result.profile.ramGb, 16); assert.equal(result.profile.ramType, 'DDR4'); assert.equal(result.profile.gpu, 'RTX 3060');
+  assert.match(result.status, /RAM speed.*outside.*range.*unknown/i);
+  assert.equal(calls.length, 2); assert.equal(receipts.length, 2); assert.ok(Math.abs(budget.spent - 0.00084) < 1e-12);
+  assert.ok(!result.evidence.some(item => item.field === 'ramSpeedMhz'), 'a rejected speed is not accepted evidence');
+});
+
+test('a standalone RAM offer still needs review when its invalid speed is discarded', async () => {
+  const listing = { ...raw, category: 'ram' as const, title: 'RAM DDR4 DIMM 16GB', description: 'Used RAM DDR4 DIMM 16GB 32000MHz, working normally.' };
+  const value = { ...extraction(), kind: 'ram', profile: { ...EMPTY_PROFILE, ramGb: 16, ramType: 'DDR4', ramFormFactor: 'DIMM', ramSpeedMhz: 32_000, priceBasis: 'item' },
+    evidence: [{ field: 'ramGb', quote: '16GB' }, { field: 'ramType', quote: 'DDR4' }, { field: 'ramFormFactor', quote: 'DIMM' }, { field: 'ramSpeedMhz', quote: '32000MHz' }] };
+  const { client } = mockClient(decisions('ram'), completion(value));
+  const result = await client.assess(listing, new RefreshBudget(0.25));
+  assert.equal(result.profile.ramSpeedMhz, null); assert.equal(result.eligibility, 'review');
+  assert.ok(result.unknowns.some(note => note.includes('ramSpeedMhz')));
+});
+
+test('a null speed retains its explanation and a guessed zero correction cannot pass source quotes', async () => {
+  const listing = { ...raw, category: 'desktop' as const, description: `${raw.description} RAM DDR4 16GB 32000MHz.` };
+  for (const speed of [null, 3200]) {
+    const value = { ...extraction(), kind: 'desktop', profile: { ...extraction().profile, ramSpeedMhz: speed },
+      unknowns: [{ field: 'ramSpeedMhz', reason: 'Seller-stated RAM speed is outside the supported range.' }],
+      evidence: [...extraction().evidence, { field: 'ramSpeedMhz', quote: '32000MHz' }] };
+    const result = await mockClient(decisions('desktop'), completion(value)).client.assess(listing, new RefreshBudget(0.25));
+    assert.equal(result.profile.ramSpeedMhz, null); assert.equal(result.profile.gpu, 'RTX 3060');
+    if (speed === null) assert.match(result.status, /RAM speed remains unknown: Seller-stated/);
+  }
+});
+
+test('RAM speed recovery cannot hide another schema violation or accept a wrong field type', async () => {
+  for (const profile of [ { ramSpeedMhz: 32_000, ramGb: 0 }, { ramSpeedMhz: '32000' }, { ramSpeedMhz: 3200.5 } ]) {
+    const value = { ...extraction(), profile: { ...extraction().profile, ...profile } };
+    const { client, calls } = scriptedClient([reply(decisions()), reply(completion(value)), reply(completion(value))]);
+    await assert.rejects(client.assess(raw, new RefreshBudget(0.25)), /unsupported or invalid hardware fields/);
+    assert.equal(calls.length, 3);
+  }
+});
+
 test('invalid fields stay invalid after the single retry, with safe field diagnostics', async () => {
   const invalid = { ...extraction(), profile: { ...extraction().profile, ramGb: 0, quantity: 0, storageGb: 100_000 },
     confidence: 95, 'hidden-fixture-key': 'sensitive-provider-text' };

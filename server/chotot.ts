@@ -454,7 +454,11 @@ export class ChototClient {
       } catch (error) {
         signal?.throwIfAborted();
         if (error instanceof SourceCooldownError || error instanceof SourceDeferredError) { this.block(error); throw error; }
-        if (proxy && !(error instanceof Error && /^Chợ Tốt|^This Chợ Tốt/.test(error.message))) {
+        // The deadline's DOMException also starts with "Chợ Tốt". It is a
+        // transport failure, including during body reads, rather than a source
+        // rejection. Let another route work before deferring the checkpoint.
+        const timedOut = controller.signal.aborted || error instanceof Error && error.name === 'TimeoutError';
+        if (proxy && (timedOut || !(error instanceof Error && /^Chợ Tốt|^This Chợ Tốt/.test(error.message)))) {
           this.proxies!.failed(proxy); worker.uri = null;
           await this.refilling.run(async () => {
             signal?.throwIfAborted(); this.assertAvailable();
@@ -464,7 +468,7 @@ export class ChototClient {
           }, signal);
           attempt--; continue;
         }
-        if (controller.signal.aborted) throw new Error('Chợ Tốt request timed out after 15 seconds.');
+        if (timedOut) throw new Error('Chợ Tốt request timed out after 15 seconds.');
         if (error instanceof Error && /^Chợ Tốt|^This Chợ Tốt/.test(error.message)) throw error;
         throw new Error('Could not read Chợ Tốt. Check the connection and try refreshing again.');
       } finally {
