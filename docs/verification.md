@@ -38,6 +38,9 @@ evidence, stale structured prices, redirect allowlists and bounded responses.
 Service tests prove laptop collection makes no nationwide used-peer queries,
 USD filtering preserves stored native amounts, offline reads issue no provider
 requests, and price-cache maintenance drains during shutdown and excludes release.
+Indicative laptop estimates that require configuration review remain discoverable
+in both the review and indicative views, without a deal badge or promotion into
+working items. Memory filters and private dismissal still apply.
 
 Separate live checks on 25 October 2026 verified USD/VND lookup, a purchasable
 HACOM configuration, and historical fallback after a successful M1 absence check.
