@@ -248,8 +248,8 @@ export class FlipperService {
       saved: items.filter((item) => item.state.saved).length, excluded: items.filter(needsReview).length };
     if (view === 'saved') items = items.filter((item) => item.state.saved);
     else if (view === 'review') items = items.filter((item) => needsReview(item) || item.state.dismissed);
+    else if (view === 'indicative') items = items.filter(item => item.valuation.status === 'indicative' && !item.state.dismissed);
     else if (view !== 'history') items = items.filter((item) => !needsReview(item) && !item.state.dismissed);
-    if (view === 'indicative') items = items.filter(item => item.valuation.status === 'indicative');
     if (view === 'components') items = items.filter(item => item.valuation.componentOpportunity);
     const district = params.get('district'); if (district) items = items.filter((item) => item.district === district);
     const maxPrice = Number(params.get('maxPrice'));

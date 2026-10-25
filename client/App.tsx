@@ -635,7 +635,7 @@ export default function App() {
                   : view === "review"
                     ? "Missing specs, conflicting details, and listings that need your judgment."
                     : view === "history" ? "Retained observations outside the latest successful collection. Dates show when each price was retrieved; availability needs checking."
-                    : view === "indicative" ? "Three or four independent offers provide a starting point. More evidence is required for a confirmed find."
+                    : view === "indicative" ? "These estimates need stronger source, configuration, or freshness evidence before they can qualify as good prices."
                     : view === "components" ? "The asking price is below the supported value of identified parts. Omitted parts remain unpriced."
                     : "Find used laptops, desktops, and GPUs from the latest successful collection."}
               </p>

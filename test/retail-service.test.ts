@@ -60,3 +60,30 @@ test('background cache refresh participates in deployment exclusion and drains o
   assert.throws(() => f.service.refresh('laptop',''),/cache is refreshing/);
   await f.service.shutdown(); await work; assert.equal(f.service.deploymentStatus().busy,false);f.store.close();
 });
+
+test('indicative laptop prices remain discoverable when configuration review is required', async () => {
+  const f = fixture();
+  try {
+    const item = {...f.item,title:'MacBook Air M1 2020 13.3 inch 8CPU 8GB/256GB'};
+    const assessment = assessWithRules(item);
+    assessment.eligibility = 'review';
+    assessment.unknowns.push('GPU core count is unknown');
+    f.store.putListing(item,assessment,true);f.store.setCollection('laptop','',[item.id]);
+    await f.prices.laptops.warm(assessment.profile);
+    assert.equal(f.service.publicDetail(item.id)?.valuation.status,'indicative');
+    for (const readOnly of [false,true]) {
+      const list = (query:string) => readOnly ? f.service.publicListings('laptop',new URLSearchParams(query))
+        : f.service.listings('laptop',new URLSearchParams(query));
+      const indicative = list('view=indicative');
+      assert.equal(indicative.stats.indicative,1);
+      assert.equal(indicative.total,1,'the indicative count must lead to its configuration-review listing');
+      assert.equal(indicative.items[0]?.valuation.opportunity,false);
+      assert.equal(list('view=all').total,0,'an indicative estimate does not clear configuration review');
+      assert.equal(list('view=review').total,1);
+      assert.equal(list('view=indicative&minRamGb=16').total,0,'memory filters still apply');
+    }
+    f.store.setState(item.id,{dismissed:true});
+    assert.equal(f.service.listings('laptop',new URLSearchParams('view=indicative')).total,0);
+    assert.equal(f.service.publicListings('laptop',new URLSearchParams('view=indicative')).total,1,'private dismissal never affects the public market');
+  } finally {await f.service.shutdown();f.store.close();}
+});

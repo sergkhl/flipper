@@ -4979,7 +4979,11 @@ strong {
 }
 @media (max-width: 600px) {
   .runs-page { padding: 18px 14px; }
-  .topbar-right { gap: 10px; }
+  .topbar { gap: 12px; }
+  .breadcrumb { min-width: 0; }
+  .breadcrumb > span, .breadcrumb > svg, .topbar-right > .avatar { display: none; }
+  .breadcrumb strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar-right { gap: 10px; flex-shrink: 0; }
   .topbar-right .activity-connection > span { display: none; }
   .run-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .run-metrics > div:nth-child(3) { border-left: 0; }
