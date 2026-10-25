@@ -16,6 +16,13 @@ independently for every administrator route and strips the prefix internally.
 Public routes cannot gain write access by supplying the same header. Hosted
 writes reject foreign origins and cross-site browser metadata.
 
+An authenticated administrator request sets a secure, HttpOnly session cookie
+remembering the administrator workspace. With that cookie, GET/HEAD `/` redirects
+to `/admin/`, preserving the query string. `/?public=1` explicitly opens the
+public view. This cookie controls navigation only: public APIs remain read-only,
+and administrator routes still require the proxy token. Hosted HTML and these
+redirects are not cached.
+
 Anonymous GET/HEAD access is limited to `/api/bootstrap`, `/api/listings`,
 `/api/listings/:id`, static UI assets, and `/healthz`. Every public write is
 rejected before parsing its body. Public bootstrap has `access: read-only`,

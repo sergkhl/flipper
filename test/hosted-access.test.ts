@@ -214,6 +214,53 @@ test('hosted HTTP exposes anonymous market reads while every private route and w
   assert.equal(store.getSettings().aiBudgetUsd, DEFAULT_SETTINGS.aiBudgetUsd);
 });
 
+test('signed-in home navigation reopens the administrator workspace and preserves deep links', async (t) => {
+  const { base } = await httpFixture(t);
+  const anonymous = await fetch(base + '/');
+  assert.equal(anonymous.status, 200);
+  assert.equal(anonymous.headers.get('set-cookie'), null);
+  assert.equal(anonymous.headers.get('cache-control'), 'no-store');
+
+  for (const path of ['/admin/', '/admin/api/bootstrap']) {
+    const rejected = await fetch(base + path);
+    assert.equal(rejected.headers.get('set-cookie'), null);
+    const signedIn = await fetch(base + path, { headers: adminHeaders });
+    assert.equal(signedIn.status, 200);
+    const cookie = signedIn.headers.get('set-cookie')!;
+    assert.equal(cookie, '__Host-flipper-workspace=admin; Path=/; HttpOnly; Secure; SameSite=Lax');
+
+    for (const method of ['GET', 'HEAD']) {
+      const home: Response = await fetch(base + '/?category=gpu&listing=retained-gpu', {
+        method, headers: { cookie: 'other=value; ' + cookie.split(';')[0] }, redirect: 'manual',
+      });
+      assert.equal(home.status, 302);
+      assert.equal(home.headers.get('location'), '/admin/?category=gpu&listing=retained-gpu');
+      assert.equal(home.headers.get('cache-control'), 'no-store');
+      assert.equal(home.headers.get('vary'), 'Cookie');
+      assert.equal(await home.text(), '');
+    }
+  }
+});
+
+test('workspace navigation cookies allow an explicit public view and cannot authorize private access', async (t) => {
+  const { base } = await httpFixture(t);
+  const headers = { cookie: '__Host-flipper-workspace=admin' };
+  const preview = await fetch(base + '/?public=1', { headers, redirect: 'manual' });
+  assert.equal(preview.status, 200);
+  assert.equal(preview.headers.get('location'), null);
+  assert.equal(preview.headers.get('cache-control'), 'no-store');
+  assert.match(await preview.text(), /Flipper test shell/);
+  for (const cookie of ['unrelated=__Host-flipper-workspace=admin', '__Host-flipper-workspace=administrator']) {
+    assert.equal((await fetch(base + '/', { headers: { cookie }, redirect: 'manual' })).status, 200);
+  }
+  const publicBootstrap = await fetch(base + '/api/bootstrap', { headers });
+  assert.equal((await publicBootstrap.json() as BootstrapResponse).access, 'read-only');
+  assert.equal((await fetch(base + '/api/runs', { headers })).status, 404);
+  assert.equal((await fetch(base + '/admin/api/bootstrap', { headers })).status, 403);
+  assert.equal((await fetch(base + '/api/settings', { method: 'POST', headers })).status, 403);
+  assert.equal((await fetch(base + '/', { method: 'POST', headers, redirect: 'manual' })).status, 403);
+});
+
 test('hosted administrative writes require exact origin and reject cross-site metadata while token-authenticated CLI writes work', async (t) => {
   const { base, store } = await httpFixture(t);
   const write = (headers: Record<string, string>) => fetch(base + '/admin/api/settings', {
