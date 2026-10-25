@@ -6,5 +6,5 @@
     "allowImportingTsExtensions": true, "noEmit": true,
     "types": ["node", "vite/client"]
   },
-  "include": ["client", "server", "shared", "test", "vite.config.ts"]
+  "include": ["client", "server", "shared", "scripts", "test", "vite.config.ts"]
 }

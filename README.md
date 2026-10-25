@@ -148,8 +148,9 @@ integration is configured. Operate one server process per data directory.
   prices are used directly. When a successful current lookup finds none, apply
   the agreed depreciation curve to a documented original launch price. Unknown
   configuration/class/release timing and conflicting evidence show an indicative
-  range without a badge. Initial historical coverage includes four 2020 M1
-  MacBook base configurations; unsupported laptops remain unpriced.
+  range without a badge. The reviewed history includes M1/M2/M4 MacBooks and
+  Surface Pro 7/7+ configurations; unsupported laptops remain unpriced. See the
+  [source evidence](docs/data-sources.md) and [coverage benchmark](docs/laptop-price-benchmark.md).
   [ADR 0012](docs/adr/0012-laptop-retail-pricing-and-usd.md) defines the curves.
 - **USD display:** all price displays and maximum-price inputs use one current
   FX snapshot. Original currency values remain visible in details and unchanged

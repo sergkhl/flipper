@@ -56,6 +56,24 @@ native-price provenance, source details, and the strict below-reference rule.
 Both sizes had no page errors or horizontal overflow. These browser checks
 used an isolated database and synthetic sources, with no external requests.
 
+Launch-price coverage validation on 25 October 2026: all 374 application tests,
+all 10 release-policy tests and the Node 26 TypeScript/Vite production build
+passed. Scripts are included in TypeScript checking. New cases guard Surface
+Pro 7 versus 7+, explicit Intel SKU aliases, contradictory CPU generations,
+RAM/storage/GPU conflicts, reviewed launch dates and source links, exclusion of
+restricted education prices, foreign Wi-Fi/LTE ranges without deal badges, and
+rejection of unsupported upgraded MacBook configurations. Current-retail
+precedence and seven-day cache tests continue to pass.
+
+The separate [live coverage benchmark](laptop-price-benchmark.md) exercised twenty
+configuration-only cases through the production retail adapters, reusing valid
+cached observations and FX. Eighteen additional public retail requests yielded
+fifteen complete lookups and five explicit failures. Replaying the same inputs
+offline after the change increased indicative references from one to six, with
+no firm reference or verified current exact price in either version. No new
+marketplace scan, AI call or paid service was used. This is a bounded source
+coverage measurement; it does not prove stock absence at other retailers.
+
 Request-control tests cover the rolling 700-attempt ceiling, 150 automatic
 attempts per category, manual reserve, exact expiration, persistent pacing and
 shared SQLite reservations. Proxy tests mock both lists, unsafe endpoint input,
