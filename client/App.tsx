@@ -594,8 +594,8 @@ export default function App() {
             {canManage && <span className="avatar" title="Your personal workspace">
               F
             </span>}
-            <a className="access-link" href={canManage ? "/" : "/admin/"}>
-              {canManage ? "Public view" : "Sign in"}
+            <a className="access-link" href={canManage ? "/?public=1" : "/admin/"}>
+              {canManage ? "Public view" : new URLSearchParams(window.location.search).get('public') === '1' ? "Admin workspace" : "Sign in"}
               <ArrowRight size={14} />
             </a>
           </div>

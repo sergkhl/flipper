@@ -102,8 +102,18 @@ export function appServer(service: FlipperService, dist = resolve('dist'), optio
         if (!/^\/admin(?:\/|$)/.test(path)) throw new HTTPError(400, 'Invalid administration path');
         publicReadOnly = false;
         path = path.slice('/admin'.length) || '/';
+        // Remember navigation only; every administrator request still requires the proxy token.
+        res.setHeader('Set-Cookie', '__Host-flipper-workspace=admin; Path=/; HttpOnly; Secure; SameSite=Lax');
       }
       const readRequest = req.method === 'GET' || req.method === 'HEAD';
+      if (access.hosted && !adminPath && path === '/' && readRequest) {
+        res.setHeader('Vary', 'Cookie');
+        const prefersAdmin = req.headers.cookie?.split(';').some(cookie => cookie.trim() === '__Host-flipper-workspace=admin');
+        if (prefersAdmin && url.searchParams.get('public') !== '1') {
+          res.writeHead(302, { Location: '/admin/' + url.search, 'Cache-Control': 'no-store' });
+          return res.end();
+        }
+      }
       const ensureNotInMaintenance = () => {
         const cancellingJob = req.method === 'POST' && /^\/api\/(?:jobs|runs)\/[^/]+\/cancel$/.test(path);
         if (!cancellingJob && service.store.deploymentMaintenanceActive()) throw new HTTPError(503, 'Deployment is in progress; try again shortly');
@@ -222,7 +232,7 @@ export function appServer(service: FlipperService, dist = resolve('dist'), optio
       if (!file || !existsSync(file)) throw new HTTPError(404, 'Build the app with npm run build first');
       const contentTypes: Record<string,string> = { '.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon' };
       res.writeHead(200, { 'Content-Type': contentTypes[extname(file)] ?? 'application/octet-stream', 'X-Content-Type-Options':'nosniff',
-        'Cache-Control': file.endsWith('index.html') ? 'no-cache' : 'public, max-age=3600' });
+        'Cache-Control': file.endsWith('index.html') ? access.hosted ? 'no-store' : 'no-cache' : 'public, max-age=3600' });
       res.end(req.method === 'HEAD' ? undefined : readFileSync(file));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Request failed';
