@@ -615,8 +615,8 @@ test('local HTTP settings validate economic gates, never return a key and reject
     assert.equal(oversizedPool.status, 400);
     const forbidden = await fetch(base + '/api/settings', { method:'POST', headers: { 'content-type':'application/json', origin:'https://example.com' }, body: JSON.stringify({ discountPercent: 30 }) });
     assert.equal(forbidden.status, 403);
-    const settings = await fetch(base + '/api/settings', { method:'POST', headers: { 'content-type':'application/json' }, body: JSON.stringify({ discountPercent: 25, costReserves: { gpu: 300_000 }, minRamGb: 32, minVramGb: 12, includeUnknownMemory: false, liteLlmKey: 'settings-gateway-fixture' }) });
-    assert.equal(settings.status, 200); assert.equal(store.getSettings().discountPercent, 25);
+    const settings = await fetch(base + '/api/settings', { method:'POST', headers: { 'content-type':'application/json' }, body: JSON.stringify({ discountPercent: 0, costReserves: { gpu: 300_000 }, minRamGb: 32, minVramGb: 12, includeUnknownMemory: false, liteLlmKey: 'settings-gateway-fixture' }) });
+    assert.equal(settings.status, 200); assert.equal(store.getSettings().discountPercent, 0);
     assert.equal(store.getSettings().costReserves.laptop, 500_000); assert.equal(store.getSettings().costReserves.gpu, 300_000);
     const saved = await settings.json() as { ai: { configured: boolean; keySource: string }; settings: Record<string, unknown> };
     assert.equal(saved.ai.configured, true);

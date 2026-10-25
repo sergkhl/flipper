@@ -6,7 +6,8 @@ asking-price references. Resale controls and assumptions are removed from the
 interface as of 14 October 2026; legacy stored fields remain compatible. Phones
 are excluded from the current version. Chợ Tốt is the initial
 marketplace and Da Nang is the initial buying location. Reference comparisons
-use nationwide offers for particular device models or important components.
+use new retail/original launch evidence for laptops and nationwide used offers
+for GPUs and desktops. Display prices in USD using a current cached FX snapshot.
 The app supports category browsing, model searches, saved searches, and manual
 refresh, with LiteLLM-assisted classification and interpretation. Chat uses the
 exact gateway route `xiaomi_mimo/mimo-v2.6-flash`; the dedicated OpenRouter
@@ -108,8 +109,12 @@ existing runs and recoveries retain their captured parameters. Daily AI allowanc
 use the saved default subject to the USD 0.25 category ceiling. See ADRs 0009–0011.
 
 **Reference price**:
-A filtered arithmetic mean of matching nationwide used Chợ Tốt asking-price
-offers from independent sellers. At least three offers provide an indicative
+A supported comparison value. Laptops use the lowest verified exact-configuration
+new retail price including known Vietnam purchase costs, or original launch price
+times historical retained value after a successful current-price absence check.
+See ADR 0012 for the source hierarchy, seven-day caches and depreciation policy.
+GPUs and desktops use a filtered arithmetic mean of matching nationwide used
+Chợ Tốt asking-price offers from independent sellers. At least three offers provide an indicative
 average and range; at least five (or a higher configured minimum) are required
 for deal scoring. The candidate, its seller,
 duplicates, incompatible configurations, ambiguous offers, and numeric outliers
@@ -121,8 +126,8 @@ computer evidence can be supplemented by component-adjusted comparisons.
 **Component-adjusted comparison**:
 A comparable computer's asking price minus supported averages for removed parts
 plus supported averages for added parts. Desktops retain CPU/platform and can
-adjust GPU, RAM and SSD. Laptops retain model, CPU and mobile GPU and require
-verified RAM/SSD replaceability. Explicit GPU absence differs from unknown GPU
+adjust GPU, RAM and SSD. Laptop used-peer adjustment was superseded by retail
+pricing on 25 October 2026. Explicit GPU absence differs from unknown GPU
 inclusion, and separately priced configurations retain their own included parts.
 Each PC advertisement and seller contributes once. The weakest PC/part pool
 sets the evidence count; combinations do not manufacture independent samples.
@@ -143,15 +148,16 @@ derived types are displayed separately from capacity, with provenance for the
 latter. Ambiguous variants and contradictory evidence remain unresolved.
 
 **Discount threshold**:
-The minimum reduction of the asking price relative to its reference price.
-It defaults to 10% and is configurable. For reference price R and asking price
-P, the discount is (R - P) / R; at the default threshold P must be at most 0.9R.
+Any strictly positive reduction from the supported reference. For reference R
+and asking price P, the discount is `(R − P) / R`; a good price requires `P < R`.
+Equality does not qualify. The legacy setting is fixed at zero.
 
 **Below-market find**:
-A current, eligible listing whose asking price meets the discount threshold
-against a complete or component-adjusted whole-item reference. At least five
+A current, eligible listing whose asking price is strictly below its whole-item
+reference. Laptop badges explicitly name new retail or depreciation estimates.
+GPU/desktop complete or component-adjusted references require at least five
 independent sellers (or the higher configured minimum) and observations within
-24 hours remain required. Three or four offers provide separately browsable
+24 hours. Three or four offers provide separately browsable
 indicative comparisons without a scored discount or deal badge.
 
 **Partial component baseline**:

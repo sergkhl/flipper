@@ -23,7 +23,7 @@ import type {
 } from "../shared/types";
 import Drawer from "./Drawer";
 import { message } from "./api";
-import { date, money, safeSourceUrl } from "./format";
+import { date, money, originalMoney, safeSourceUrl, usd } from "./format";
 import { evidenceLabel } from "./valuation";
 import { hasDedicatedVram, hasMemoryTypeEstimates, hasTechApiMemoryData, memoryDescription, type MemoryTypeMetadata } from "./memory";
 
@@ -161,6 +161,7 @@ export default function ListingDrawer({
             <div>
               <span>Seller asking price</span>
               <strong>{money(item.price)}</strong>
+              <small>Original: {originalMoney(item.price)}</small>
               <small>Observed {date(item.observedAt)}</small>
             </div>
             <div
@@ -175,8 +176,8 @@ export default function ListingDrawer({
                   <span>
                     <TrendingDown size={15} />
                     {item.valuation.reference?.kind === "component_floor"
-                      ? item.valuation.discountPercent >= 0 ? "Below component value" : "Above component value"
-                      : item.valuation.discountPercent >= 0
+                      ? item.valuation.discountPercent > 0 ? "Below component value" : "At or above component value"
+                      : item.valuation.discountPercent === 0 ? 'Equal to reference' : item.valuation.discountPercent > 0
                       ? "Below reference"
                       : "Above reference"}
                   </span>
@@ -188,8 +189,9 @@ export default function ListingDrawer({
                     {item.valuation.reference?.kind === "component_floor"
                       ? "Partial parts total; whole-PC value is not established"
                       : item.valuation.opportunity
-                      ? `Meets ${canManage ? "your" : "the"} discount threshold`
-                      : `${canManage ? "Your" : "The"} threshold is ${settings?.discountPercent ?? 10}% below`}
+                      ? item.valuation.reference?.retail?.basis === 'current_new' ? 'Good price vs new retail'
+                        : item.valuation.reference?.retail ? 'Good price vs depreciation estimate' : 'Good price: below the supported reference'
+                      : item.valuation.status === 'indicative' ? 'Indicative evidence; no firm verdict' : 'Any amount strictly below qualifies; equality does not'}
                   </small>
                 </>
               ) : (
@@ -259,7 +261,7 @@ export default function ListingDrawer({
 
           <section className="detail-section">
             <div className="section-heading">
-              <h3>Nationwide price reference</h3>
+              <h3>{item.category === 'laptop' ? 'Retail price reference' : 'Nationwide price reference'}</h3>
               <span
                 className={`badge ${item.valuation.confidence === "high" ? "green-badge" : ""}`}
               >
@@ -281,8 +283,8 @@ export default function ListingDrawer({
                   </strong>
                   <p>{item.valuation.reason}</p>
                   <span>
-                    At least 3 other independent sellers support an indicative average;
-                    discount scoring needs {Math.max(5, settings?.minComparables ?? 5)} per required price pool.
+                    {item.category === 'laptop' ? 'A dated new retail or original launch price is needed for this exact configuration.'
+                      : `At least 3 independent sellers support an indicative average; scoring needs ${Math.max(5, settings?.minComparables ?? 5)} per required price pool.`}
                   </span>
                 </div>
               </div>
@@ -473,6 +475,41 @@ export default function ListingDrawer({
   );
 }
 
+function RetailReference({reference}: {reference: ReferencePrice}) {
+  const evidence = reference.retail!;
+  const historical = evidence.basis === 'historical_depreciation';
+  return <>
+    <div className="reference-summary"><div>
+      <span>{reference.label}{evidence.indicative ? ' · indicative only' : ''}</span>
+      <strong>{money(reference.average)}</strong>
+      {evidence.indicative && reference.min !== reference.max && <p>Range: {money(reference.min)}–{money(reference.max)}</p>}
+      <p>{reference.methodology}</p>
+    </div></div>
+    {historical && <p className="section-caption">
+      Original new price: {evidence.originalUsd === null ? 'Unknown' : usd(evidence.originalUsd)}.
+      {' '}Model age: {evidence.ageYears !== null ? `${evidence.ageYears.toFixed(1)} years`
+        : evidence.ageRange ? `${evidence.ageRange[0].toFixed(1)}–${evidence.ageRange[1].toFixed(1)} years` : 'Unknown'}.
+      {' '}Depreciation class: {evidence.laptopClass === 'apple_silicon' ? 'Apple Silicon' : evidence.laptopClass === 'business'
+        ? 'Windows business/premium' : evidence.laptopClass === 'consumer' ? 'Consumer/gaming/Intel Mac' : 'Uncertain'}.
+      {evidence.retention !== null && ` Retained value: ${(100*evidence.retention).toFixed(1)}% (drop ${(100*(1-evidence.retention)).toFixed(1)}%).`}
+    </p>}
+    <p className="section-caption">Working-used condition assumed. Confirm battery health and wear with the seller.</p>
+    {evidence.reasons.length > 0 && <div className="notice warning-notice"><Info size={17}/><p>{evidence.reasons.join(' ')}</p></div>}
+    <p className="section-caption">Current retail lookup: {evidence.lookupStatus === 'complete' ? 'complete within configured sources' : evidence.lookupStatus === 'failed' ? 'incomplete / failed' : 'not checked'} · {date(evidence.checkedAt)}.</p>
+    <p className="section-caption">USD exchange rates dated {evidence.fx.date}, fetched {date(evidence.fx.fetchedAt)}. Retail prices and exchange rates are cached for 7 days. Historical prices use this same current rate.</p>
+    {evidence.sources.map((source,index) => <div className="component-reference" key={source.id}>
+      <div className="component-heading"><div>
+        <span className="eyebrow">{source.basis === 'launch_msrp' ? 'Launch MSRP' : source.basis === 'launch_retail' ? 'Original launch retail' : index === 0 ? 'Lowest verified new offer' : 'New retail offer'}</span>
+        <h4><a href={safeSourceUrl(source.url)} target="_blank" rel="noreferrer">{source.title} <ExternalLink size={13}/></a></h4>
+      </div><strong>{usd(source.amount/evidence.fx.rates[source.currency])}</strong></div>
+      <p className="section-caption">{source.source} · original {originalMoney(source.amount,source.currency)} · {source.market} · price date {source.priceDate ?? 'unknown'} · checked {date(source.observedAt)}</p>
+      {source.basis === 'current_new' && <p className="section-caption">{source.available ? 'In stock when checked' : 'Availability unverified'} · {source.totalCostKnown && source.shipsToVietnam ? 'Includes tax and mandatory Vietnam delivery' : 'Complete Vietnam purchase cost is unverified'}</p>}
+      {source.releaseSourceUrl && <p className="section-caption"><a href={safeSourceUrl(source.releaseSourceUrl)} target="_blank" rel="noreferrer">Model release evidence</a>: {source.releaseDate ?? source.releaseYear ?? 'unknown'}</p>}
+      {source.configurationSourceUrl && <p className="section-caption"><a href={safeSourceUrl(source.configurationSourceUrl)} target="_blank" rel="noreferrer">Original configuration evidence</a> (specifications only)</p>}
+    </div>)}
+  </>;
+}
+
 function Reference({
   reference,
   asking,
@@ -482,6 +519,7 @@ function Reference({
   asking: number;
   minComparables: number;
 }) {
+  if (reference.retail) return <RetailReference reference={reference} />;
   const component = reference.kind === "component_floor";
   const adjusted = reference.kind === "adjusted_configuration";
   const baseCount = reference.baseSampleCount ?? reference.adjustedOffers?.length ?? reference.offers.length;

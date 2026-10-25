@@ -29,7 +29,7 @@ const runLimitsSchema = z.object({
 });
 const settingsSchema = z.object({
   ...memorySettingsSchema,
-  discountPercent: z.number().finite().min(0).max(90).optional(),
+  discountPercent: z.literal(0).optional(),
   minComparables: z.number().int().min(5).max(50).optional(),
   minProfit: z.number().finite().min(0).max(1e9).optional(), minRoiPercent: z.number().finite().min(0).max(500).optional(),
   resaleFactor: z.number().finite().min(.1).max(1.5).optional(),
@@ -207,7 +207,7 @@ export function appServer(service: FlipperService, dist = resolve('dist'), optio
         if (listingMatch[2] === 'analyze' && req.method === 'POST') { if (!service.detail(id)) throw new HTTPError(404, 'Listing not found'); return json(res, { job: service.analyze(id) }, 202); }
       }
       if (path === '/api/searches' && req.method === 'POST') {
-        const data = parse(z.object({ name: z.string().trim().min(1).max(100), category: categorySchema, query: z.string().max(200), district: z.string().max(100).default(''), mode: z.enum(['buy','resale']).default('buy'), maxPrice: z.number().finite().positive().nullable().default(null), ...memorySettingsSchema, opportunities: z.boolean().default(false) }).strict(), await mutationBody());
+        const data = parse(z.object({ name: z.string().trim().min(1).max(100), category: categorySchema, query: z.string().max(200), district: z.string().max(100).default(''), mode: z.enum(['buy','resale']).default('buy'), maxPrice: z.number().finite().positive().nullable().default(null), priceCurrency: z.enum(['VND','USD']).default('VND'), ...memorySettingsSchema, opportunities: z.boolean().default(false) }).strict(), await mutationBody());
         const settings = service.store.getSettings();
         return json(res, { search: service.store.saveSearch({ ...data,
           minRamGb: data.minRamGb ?? settings.minRamGb, minVramGb: data.minVramGb ?? settings.minVramGb,

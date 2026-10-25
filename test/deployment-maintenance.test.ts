@@ -116,7 +116,7 @@ test('the private deployment API exposes only busy status, freezes all mutations
   assert.deepEqual(await (await fetch(base + '/admin/api/deployment', { headers })).json(), { busy: true });
   for (const [path, method, body] of [
     ['/api/refresh', 'POST', '{"category":"gpu"}'], ['/api/listings/' + f.candidate.id + '/analyze', 'POST', '{}'],
-    ['/api/ai/test', 'POST', '{}'], ['/api/settings', 'POST', '{"discountPercent":27}'],
+    ['/api/ai/test', 'POST', '{}'], ['/api/settings', 'POST', '{"minComparables":27}'],
     ['/api/listings/' + f.candidate.id + '/state', 'POST', '{"saved":true}'],
     ['/api/searches', 'POST', '{"name":"Private","category":"gpu","query":""}'],
     ['/api/searches/anything', 'DELETE', '{}'],
@@ -127,19 +127,19 @@ test('the private deployment API exposes only busy status, freezes all mutations
   }
   assert.equal((await fetch(base + '/admin/api/bootstrap', { headers })).status, 200);
   assert.equal((await fetch(base + '/api/listings?category=gpu')).status, 200);
-  assert.equal(f.store.getSettings().discountPercent, 10); assert.equal(f.store.getListing(f.candidate.id)?.state.saved, false);
+  assert.equal(f.store.getSettings().minComparables, 5); assert.equal(f.store.getListing(f.candidate.id)?.state.saved, false);
   assert.deepEqual(f.store.searches(), []);
   const cancellation = await fetch(base + '/admin/api/jobs/' + job.id + '/cancel', { method: 'POST', headers });
   assert.equal(cancellation.status, 200);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(await (await fetch(base + '/admin/api/deployment', { headers })).json(), { busy: false });
   rmSync(f.marker);
-  const resumed = await fetch(base + '/admin/api/settings', { method: 'POST', headers, body: '{"discountPercent":27}' });
-  assert.equal(resumed.status, 200); assert.equal(f.store.getSettings().discountPercent, 27);
+  const resumed = await fetch(base + '/admin/api/settings', { method: 'POST', headers, body: '{"minComparables":27}' });
+  assert.equal(resumed.status, 200); assert.equal(f.store.getSettings().minComparables, 27);
 });
 
 test('a mutation whose body finishes after the maintenance marker appears is rejected before it writes', async (t) => {
-  const f = fixture(t), base = await f.startHTTP(), payload = '{"discountPercent":29}';
+  const f = fixture(t), base = await f.startHTTP(), payload = '{"minComparables":29}';
   let req!: ReturnType<typeof request>, ready!: Promise<void>;
   const response = new Promise<{ status: number; body: string }>((resolve, reject) => {
     req = request(base + '/admin/api/settings', { method: 'POST', headers: { ...headers,
@@ -154,5 +154,5 @@ test('a mutation whose body finishes after the maintenance marker appears is rej
   await ready; writeFileSync(f.marker, 'deployment test'); req.end(payload);
   const result = await response;
   assert.equal(result.status, 503); assert.deepEqual(JSON.parse(result.body), { error: maintenanceMessage });
-  assert.equal(f.store.getSettings().discountPercent, 10);
+  assert.equal(f.store.getSettings().minComparables, 5);
 });

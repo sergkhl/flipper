@@ -299,7 +299,7 @@ test('explicit run defaults persist across restart and feed new manual and daily
     store = new Store(directory); service = new FlipperService(store, emptySource);
     assert.deepEqual(runParameters(store.getSettings()), defaults);
     assert.equal(store.getSettings().marketplaceWorkers, 8); assert.equal(store.getSettings().aiWorkers, 8);
-    assert.equal(store.getSettings().discountPercent, 17);
+    assert.equal(store.getSettings().discountPercent, 0, 'legacy discount settings cannot restore the old gate');
     const manual = service.startRun('gpu', '', {}); await settled(service);
     assert.deepEqual(store.getRun(manual.id)?.parameters, defaults);
     service.configureDailyScans(true, new Date('2026-10-25T04:00:00Z'));

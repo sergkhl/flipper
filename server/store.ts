@@ -171,7 +171,7 @@ export class Store {
   deploymentMaintenanceActive(): boolean { return existsSync(join(this.directory, '.deployment-maintenance')); }
   getSettings(): AppSettings {
     const row = this.db.prepare('SELECT json FROM settings WHERE id=1').get() as { json: string } | undefined;
-    return row ? { ...DEFAULT_SETTINGS, ...JSON.parse(row.json), costReserves: { ...DEFAULT_SETTINGS.costReserves, ...JSON.parse(row.json).costReserves } }
+    return row ? { ...DEFAULT_SETTINGS, ...JSON.parse(row.json), discountPercent: 0, costReserves: { ...DEFAULT_SETTINGS.costReserves, ...JSON.parse(row.json).costReserves } }
       : structuredClone(DEFAULT_SETTINGS);
   }
   saveSettings(settings: AppSettings): void {

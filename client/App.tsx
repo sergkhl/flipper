@@ -54,6 +54,7 @@ import {
   safeSourceUrl,
   timeAgo,
   usd,
+  vndToUsd,
 } from "./format";
 import ListingDrawer from "./ListingDrawer";
 import SettingsDrawer from "./SettingsDrawer";
@@ -176,7 +177,7 @@ export default function App() {
       includeUnknownMemory: String(includeUnknownMemory),
       sort,
     });
-    if (maxPrice && Number(maxPrice) > 0) params.set("maxPrice", maxPrice);
+    if (maxPrice && Number(maxPrice) > 0) { params.set("maxPrice", maxPrice); params.set('priceCurrency','USD'); }
     if (category !== "gpu") params.set("minRamGb", String(minRamGb));
     setLoading(true);
     void request<ListingsResponse>(`/listings?${params}`, {
@@ -366,12 +367,14 @@ export default function App() {
   };
   const useSearch = (search: SavedSearch) => {
     if (!canManage) return;
+    const restoredPrice = search.maxPrice ? search.priceCurrency === 'USD' ? search.maxPrice : vndToUsd(search.maxPrice) : null;
+    if (search.maxPrice && restoredPrice === null) { setToast({text:'Wait for a current exchange rate before opening this saved VND price filter.'}); return; }
     setRunsOpen(false);
     setCategory(search.category);
     setQuery(search.query);
     setQueryInput(search.query);
     setDistrict(search.district);
-    setMaxPrice(search.maxPrice ? String(search.maxPrice) : "");
+    setMaxPrice(restoredPrice ? String(Number(restoredPrice.toFixed(2))) : "");
     setMinRamGb(search.minRamGb ?? bootstrap?.settings.minRamGb ?? 16);
     setMinVramGb(search.minVramGb ?? bootstrap?.settings.minVramGb ?? 8);
     setIncludeUnknownMemory(search.includeUnknownMemory ?? bootstrap?.settings.includeUnknownMemory ?? true);
@@ -393,6 +396,7 @@ export default function App() {
         district,
         mode: "buy",
         maxPrice: maxPrice && Number(maxPrice) > 0 ? Number(maxPrice) : null,
+        priceCurrency: 'USD',
         minRamGb,
         minVramGb,
         includeUnknownMemory,
@@ -433,7 +437,6 @@ export default function App() {
   };
   const running = canManage && isRunning(job);
   const ai = canManage ? response?.ai || adminBootstrap.ai : null;
-  const threshold = bootstrap?.settings.discountPercent ?? 10;
   const stats = response?.stats;
   const coverage = response?.coverage;
   const Icon = icons[category];
@@ -553,7 +556,7 @@ export default function App() {
             </div>
             <div>
               <strong>Da Nang, Vietnam</strong>
-              <span>Local pickup · nationwide context</span>
+              <span>Local pickup · supported price evidence</span>
             </div>
           </div>
           {canManage && <button className="nav-item" onClick={() => setSettingsOpen(true)}>
@@ -583,7 +586,7 @@ export default function App() {
             {canManage && <ActivityConnection connection={activity.connection} />}
             {canManage && <button className="button subtle runs-link" onClick={() => setRunsOpen(value => !value)}>{runsOpen ? 'Market' : 'Runs'}</button>}
             <span className="nationwide-label">
-              <ShieldCheck size={14} /> Nationwide benchmarks
+              <ShieldCheck size={14} /> Price evidence
             </span>
             {canManage && <button
               className="icon-button settings-top"
@@ -666,13 +669,13 @@ export default function App() {
               label="Price references"
               value={stats?.benchmarked ?? 0}
               icon={<ShieldCheck size={17} />}
-              note={`3+ offers indicative · ${bootstrap?.settings.minComparables ?? 5}+ for scoring`}
+              note={category === 'laptop' ? 'New retail, then launch-price depreciation' : `3+ offers indicative · ${bootstrap?.settings.minComparables ?? 5}+ for scoring`}
             />
             <Stat
-              label="Below-market finds"
+              label="Good-price finds"
               value={stats?.opportunities ?? 0}
               icon={<TrendingDown size={18} />}
-              note={`At least ${threshold}% below whole-item reference`}
+              note="Any amount strictly below the reference"
               accent
             />
             {canManage && <Stat
@@ -711,7 +714,7 @@ export default function App() {
                       ? "Collecting local listings"
                       : job.status === "assessing"
                         ? "Reading specifications"
-                        : "Comparing nationwide prices"}
+                        : job.category === 'laptop' ? 'Checking new retail prices' : "Comparing nationwide prices"}
                   </strong>
                   <p>{job.message}</p>
                 </div>
@@ -857,15 +860,15 @@ export default function App() {
                 <ChevronDown size={14} />
               </label>
               <label className="price-filter">
-                <span>Max ₫</span>
+                <span>Max $</span>
                 <input
                   type="number"
                   min="0"
-                  step="100000"
+                  step="0.01"
                   placeholder="Any price"
                   value={maxPrice}
                   onChange={(event) => setMaxPrice(event.target.value)}
-                  aria-label="Maximum asking price in VND"
+                  aria-label="Maximum asking price in USD"
                 />
               </label>
               {canManage && <button
@@ -967,7 +970,7 @@ export default function App() {
                   </span>
                   <TrendingDown size={15} />
                   Deals only{" "}
-                  <span className="threshold">≥ {threshold}% below</span>
+                  <span className="threshold">Any amount below</span>
                 </button>
                 <span className="filter-divider" />
                 <label className="unknown-memory-filter" title="Include listings with unknown RAM or VRAM capacity. Confirmed lower capacities still fail the selected minimums.">
@@ -1025,8 +1028,12 @@ export default function App() {
                 <p>
                   {view === "history" ? "Dated observations outside the current collection"
                     : view === "components" ? "Identified parts with supported prices; whole-PC value remains unpriced"
+                    : category === 'laptop' ? 'Used laptops compared with new retail prices, or historical depreciation when unavailable'
                     : "Local asking prices, with matching used offers across Vietnam"}
                 </p>
+                <p>{(response ? response.fx : bootstrap?.fx)
+                  ? `Prices in USD · exchange rates dated ${(response ? response.fx : bootstrap?.fx)!.date} · retail prices and FX cached for 7 days`
+                  : 'USD exchange rate unavailable. Original asking prices remain in listing details; fresh verdicts are paused.'}</p>
               </div>
               {loading && response && (
                 <span className="updating">
@@ -1052,7 +1059,6 @@ export default function App() {
                   <ListingCard
                     key={item.id}
                     item={item}
-                    threshold={threshold}
                     canManage={canManage}
                     onOpen={() => setSelectedId(item.id)}
                     onSave={() => {
@@ -1092,15 +1098,15 @@ export default function App() {
                     : view === "review"
                       ? "Listings with conflicting specifications, unclear prices, or other details to check appear here. Active filters also apply."
                       : view === "history" ? "Observations outside the latest successful collection appear here with their retrieval dates. Active filters also apply."
-                      : view === "indicative" ? "Comparisons with at least three but fewer than the required number of independent sellers appear here without a deal badge."
-                      : view === "components" ? `The asking price must be at least ${threshold}% below independently supported component values. These are separate from whole-item market finds.`
+                      : view === "indicative" ? "Estimates with incomplete source, configuration, or freshness evidence appear here without a deal badge."
+                      : view === "components" ? 'The asking price must be strictly below independently supported component values. Whole-PC value remains unpriced.'
                       : coverage
                         ? opportunities
-                          ? `A find needs at least ${bootstrap?.settings.minComparables ?? 5} matching independent offers and a ${threshold}% price gap. ${canManage ? "Browse all items or collect more evidence." : "Try browsing all items."}`
+                          ? `A find needs a supported reference and an asking price strictly below it. ${canManage ? "Browse all items or collect more evidence." : "Try browsing all items."}`
                           : `Try another model, district, RAM or VRAM minimum, unknown-memory setting, or maximum price.${canManage ? " You can refresh a focused search too." : ""}`
                         : canManage
-                          ? `Scan used ${categoryLabels[category].toLowerCase()} in Da Nang. Flipper checks nationwide offers to show the price context behind a listing.`
-                          : "Flipper shows stored used-hardware listings and nationwide asking-price evidence. Check another category or return after the market data is updated."}
+                          ? `Scan used ${categoryLabels[category].toLowerCase()} in Da Nang. Flipper checks price evidence for each configuration.`
+                          : "Flipper shows stored used-hardware listings and their price evidence. Check another category or return after the market data is updated."}
                 </p>
                 {(view === "all" || hasActiveFilters) && (
                   <div className="empty-actions">
@@ -1183,12 +1189,12 @@ export default function App() {
           <div className="method-note">
             <CircleHelp size={16} />
             <p>
-              Reference prices are filtered asking-price averages from used
-              offers, rather than completed sales. Comparable computers can be
-              adjusted using verified part prices; missing base details lower confidence.{" "}
+              Laptops use verified new retail prices, with historical depreciation as a fallback.
+              GPUs and desktops use filtered used asking prices; desktop configurations may be adjusted using verified part prices.
+              Any amount strictly below a supported reference qualifies. Equality does not.{" "}
               {canManage ? <button onClick={() => setSettingsOpen(true)}>
-                Your thresholds
-              </button> : <span>Finds require at least {bootstrap?.settings.minComparables ?? 5} independent offers and a {threshold}% price gap.</span>}
+                Price rules
+              </button> : null}
             </p>
           </div>
           {canManage && ai && ai.status !== "ready" && (
@@ -1297,14 +1303,12 @@ function Stat({
 
 function ListingCard({
   item,
-  threshold,
   canManage,
   onOpen,
   onSave,
   onDismiss,
 }: {
   item: ListingView;
-  threshold: number;
   canManage: boolean;
   onOpen: () => void;
   onSave: () => void;
@@ -1364,7 +1368,9 @@ function ListingCard({
               className={`deal-badge ${reference?.kind === "component_floor" ? "component-badge" : ""}`}
             >
               <TrendingDown size={13} />
-              {valuation.componentOpportunity ? "Below component value" : `${discount?.toFixed(0)}% below${adjusted ? " adjusted reference" : " market"}`}
+              {valuation.componentOpportunity ? "Below component value" : reference?.retail
+                ? reference.retail.basis === 'current_new' ? 'Good price vs new retail' : 'Good price vs depreciation estimate'
+                : `Good price · below${adjusted ? " adjusted reference" : " market"}`}
             </span>
           ) : (
             <span className="condition-badge">
@@ -1420,7 +1426,7 @@ function ListingCard({
           <div className="reference-box">
             <div>
               <span>
-                {adjusted
+                {reference.retail ? reference.label : adjusted
                   ? valuation.status === "indicative" ? "Indicative adjusted average" : "Component-adjusted average"
                   : valuation.status === "indicative"
                   ? "Indicative average"
@@ -1432,7 +1438,7 @@ function ListingCard({
             </div>
             <div className="reference-caption">
               <span>
-                {adjusted
+                {reference.retail ? `${reference.sampleCount} retail source${reference.sampleCount === 1 ? '' : 's'} · ${valuation.status === 'indicative' ? 'indicative only' : valuation.confidence+' confidence'}` : adjusted
                   ? `${reference.baseSampleCount ?? reference.adjustedOffers?.length ?? reference.offers.length} computer offers · smallest pool ${reference.sampleCount} sellers`
                   : reference.kind === "component_floor"
                   ? `${reference.components.length} supported components`
@@ -1440,13 +1446,13 @@ function ListingCard({
               </span>
               <span
                 className={
-                  discount !== null && discount >= threshold
+                  valuation.opportunity || valuation.componentOpportunity
                     ? "positive-text"
                     : ""
                 }
               >
                 {discount !== null
-                  ? `${Math.abs(discount).toFixed(0)}% ${discount >= 0 ? "below" : "above"}`
+                  ? discount === 0 ? 'Equal to reference' : `${Math.abs(discount).toFixed(1)}% ${discount > 0 ? "below" : "above"}`
                   : valuation.status === "indicative" ? "Low evidence" : "—"}
               </span>
             </div>

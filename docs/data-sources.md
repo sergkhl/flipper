@@ -27,6 +27,41 @@ refine matching. A changed interpretation invalidates affected price references.
 No downloaded catalog, marketplace database or listing photograph is distributed
 with this source repository. See `NOTICE.md` for third-party notices.
 
+## Laptop prices and currency conversion
+
+The implemented free sources are:
+
+| Source | Use | Evidence boundary |
+| --- | --- | --- |
+| [HACOM catalog](https://hacom.vn/sitemap.xml) and product pages | Discover matching laptops, then read JSON-LD Product/Offer data | Require a factory-new, in-stock cash offer, exact configuration, VAT and known Vietnam shipping cost. Sitemap coverage and a twelve-product bound limit the checked universe. |
+| [An Phát](https://www.anphatpc.com.vn/) public search and product pages | A second retail lookup | Ignore script templates; reject expired prices and unknown stock/cost evidence. A failed or truncated search cannot establish absence. |
+| [Frankfurter v2](https://frankfurter.dev/) | Current USD-base exchange rates, including VND | No API key. Preserve rate date and fetch date; unsupported/stale currency rows are rejected. |
+| [FPT launch retail report](https://fptshop.com.vn/tin-tuc/tin-khuyen-mai/fpt-shop-ve-day-ke-macbook-m1-mua-ngay-khong-can-cho-doi-130379) | Reviewed original Vietnamese prices | Initial coverage is Air/Pro 13-inch M1, 8 GB RAM, 256/512 GB storage. The report describes prices offered on 8 January 2021, within 90 days of release. |
+| [Apple release announcement](https://www.apple.com/newsroom/2020/11/introducing-the-next-generation-of-mac/) and [dated configuration list](https://www.apple.com/education/pricelists/pdfs/Apple_US_Education_Institution_Price_List-11-10-2020.pdf) | Release/order date and original base configurations | The education list supplies specifications only; its restricted education prices are not retail evidence. |
+
+`server/laptop-launch-prices.ts` is the reviewed historical price book. It stores
+facts and citations, not downloaded articles. Extend it only with explicit
+configuration, date, currency, cash-price and release evidence. There is no
+complete free historical laptop-price database integrated here. TechAPI remains
+a specifications catalog; its MSRP must be independently corroborated before
+entering the price book. Original prices do not expire like current offers.
+
+Live checks on 25 October 2026 confirmed a usable HACOM factory-new offer and a
+successful no-current-offer lookup for an M1 configuration. An Phát also returned
+expired structured prices, which were rejected. FPT current-page requests were
+blocked, a Thế Giới Di Động probe timed out, CellphoneS search required client-side
+data, and Phong Vũ's accessible M1 page explicitly reported out of stock. These
+are access/coverage observations, not evidence that every retailer lacks stock.
+Those sites are not silently counted as successful searches by the adapters.
+
+Current prices, discovery indexes/searches and FX cache for seven days in SQLite
+`source_runtime`; failures back off for fifteen minutes. Product observation
+times survive lookup reuse. Requests stay on allowlisted HTTPS hosts, with a
+12-second deadline, bounded bodies and three shared slots. Cache warming is
+separate from Chợ Tốt request allowances. Reads never call external sources.
+The lowest **verified** price means the lowest eligible offer in checked sources,
+not a claim to exhaustive market coverage. See ADR 0012 for fallback/FX policy.
+
 Marketplace HTTPS routing loads bounded runtime plaintext proxy lists from
 [monosans](https://github.com/monosans/proxy-list) and
 [Proxifly](https://github.com/proxifly/free-proxy-list). Both can contribute

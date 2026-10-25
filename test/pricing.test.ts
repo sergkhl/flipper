@@ -6,7 +6,7 @@ import { DEFAULT_SETTINGS } from '../server/config.ts';
 import { EMPTY_STATE } from '../server/store.ts';
 import { raw, assessment } from './helpers.ts';
 
-test('five other independent exact offers produce the filtered arithmetic mean and inclusive 20% gate', () => {
+test('five other independent exact offers produce the filtered arithmetic mean and legacy margins do not override the below-reference rule', () => {
   const candidate = raw('candidate', 4_800_000);
   const a = assessment();
   const peers = [5_800_000, 5_900_000, 6_000_000, 6_100_000, 6_200_000].map((price, i) => ({ raw: raw(`p${i}`, price), assessment: a }));
@@ -15,17 +15,18 @@ test('five other independent exact offers produce the filtered arithmetic mean a
   const valued = valueListing(candidate, a, reference, { ...DEFAULT_SETTINGS, discountPercent: 20 }, EMPTY_STATE);
   assert.equal(valued.discountPercent, 20); assert.equal(valued.opportunity, true);
   assert.equal(valued.profit, 400_000); assert.equal(valued.resaleOpportunity, false);
-  assert.equal(valueListing(candidate, a, reference, { ...DEFAULT_SETTINGS, discountPercent: 21 }, EMPTY_STATE).opportunity, false);
+  assert.equal(valueListing(candidate, a, reference, { ...DEFAULT_SETTINGS, discountPercent: 21 }, EMPTY_STATE).opportunity, true);
 });
 
-test('the default 10% gate includes its boundary and excludes prices just above it', () => {
-  assert.equal(DEFAULT_SETTINGS.discountPercent, 10);
-  const candidate = raw('ten-percent', 5_400_000), a = assessment();
+test('any amount below qualifies, while equal and higher prices do not', () => {
+  assert.equal(DEFAULT_SETTINGS.discountPercent, 0);
+  const candidate = raw('any-below', 5_999_999), a = assessment();
   const peers = Array.from({ length: 5 }, (_, i) => ({ raw: raw(`ten-peer-${i}`, 6_000_000), assessment: a }));
   const ref = buildReference(candidate, a, peers, DEFAULT_SETTINGS).reference;
   const value = valueListing(candidate, a, ref, DEFAULT_SETTINGS, EMPTY_STATE);
-  assert.equal(value.discountPercent, 10); assert.equal(value.opportunity, true); assert.equal(value.maxBuyPrice, 5_400_000);
+  assert.ok(value.discountPercent! > 0); assert.equal(value.opportunity, true); assert.equal(value.maxBuyPrice, 6_000_000);
   assert.equal(valueListing({ ...candidate, price: candidate.price + 1 }, a, ref, DEFAULT_SETTINGS, EMPTY_STATE).opportunity, false);
+  assert.equal(valueListing({ ...candidate, price: candidate.price + 2 }, a, ref, DEFAULT_SETTINGS, EMPTY_STATE).opportunity, false);
 });
 
 test('candidate, its seller, duplicate sellers, outliers, stale offers and variants cannot fabricate a discount', () => {
@@ -154,6 +155,8 @@ test('desktop supported GPU-only subtotal is explicitly partial and excludes mis
   const value = valueListing(candidate, a, result.reference, DEFAULT_SETTINGS, EMPTY_STATE);
   assert.equal(value.opportunity, false); assert.equal(value.componentOpportunity, true);
   assert.equal(value.resaleOpportunity, false);
+  assert.equal(valueListing({...candidate,price:5_999_999},a,result.reference,DEFAULT_SETTINGS,EMPTY_STATE).componentOpportunity,true);
+  assert.equal(valueListing({...candidate,price:6_000_000},a,result.reference,DEFAULT_SETTINGS,EMPTY_STATE).componentOpportunity,false);
 });
 
 test('desktop monitor bundles cannot inflate a tower-only configuration average', () => {

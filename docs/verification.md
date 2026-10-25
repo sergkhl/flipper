@@ -18,7 +18,7 @@ overreported costs and private status/control.
 
 Evidence recovery tests reproduce promotional gift-price conflicts, AI omissions
 and unambiguous single-card quantities. They cover isolated versus repeated AI
-failures within the existing allowance, inclusive 10% scoring, separate partial
+failures within the existing allowance, strict below-reference scoring, separate partial
 component and indicative views, successful/failed/empty collection publication,
 dated history and private bookmark retention. Evidence labels distinguish stale
 asking prices, stale comparisons, sparse offers and configuration review.
@@ -26,6 +26,32 @@ Unavailable ads are checked for retention without spending detail/AI/comparison
 capacity. Browser checks use isolated synthetic listings for current, indicative,
 historical and component-value views and their evidence drawers on desktop and
 mobile. No live provider or marketplace calls are needed for those UI checks.
+
+Retail tests cover current-new precedence over historical depreciation, exact
+configuration/chip-bin matching, linear retention anchors and the post-five-year
+tail, uncertain class/year/launch evidence, conflicting and foreign originals,
+the 90-day original-price window, and indicative estimates beyond eight years.
+One-dong-below and equality cases prove that display rounding cannot set badges.
+Cache tests cover seven-day reuse and restart persistence, expiry, failure
+backoff, provider-date validation, price observation dates, stock/shipping/tax
+evidence, stale structured prices, redirect allowlists and bounded responses.
+Service tests prove laptop collection makes no nationwide used-peer queries,
+USD filtering preserves stored native amounts, offline reads issue no provider
+requests, and price-cache maintenance drains during shutdown and excludes release.
+
+Separate live checks on 25 October 2026 verified USD/VND lookup, a purchasable
+HACOM configuration, and historical fallback after a successful M1 absence check.
+Expired An Phát offers and bounded/truncated lookups remained explicit failures.
+This is evidence for the sampled providers/configurations, not full market or
+historical-model coverage. See `docs/data-sources.md` for the source limitations.
+
+Retail validation on 25 October 2026: all 369 application tests and all 10
+release-policy tests passed in Node 26, with TypeScript checking and the Vite
+production build passing. Synthetic browser checks at 1440×1080 and 390×844
+verified current-retail and historical badges, USD prices and budget filters,
+native-price provenance, source details, and the strict below-reference rule.
+Both sizes had no page errors or horizontal overflow. These browser checks
+used an isolated database and synthetic sources, with no external requests.
 
 Request-control tests cover the rolling 700-attempt ceiling, 150 automatic
 attempts per category, manual reserve, exact expiration, persistent pacing and

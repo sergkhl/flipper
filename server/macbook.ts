@@ -43,7 +43,10 @@ export function macBookFacts(raw: RawListing): { model: string | null; fields: P
   const counts = (type: 'cpu' | 'gpu', text = `${title}\n${description}`) => {
     const prefix = new RegExp(`\\b${type}\\s*[:=-]?\\s*(\\d{1,2})(?:\\s*[- ]?\\s*(?:core|nhan))?\\b(?!\\s*(?:gb|g)\\b)`, 'g');
     const suffix = new RegExp(`\\b(\\d{1,2})\\s*(?:[- ]?\\s*(?:core|nhan)\\s*)?${type}\\b`, 'g');
-    return unique([...text.matchAll(prefix), ...text.matchAll(suffix)].map(match => Number(match[1])).filter(value => value > 0 && value <= 80));
+    // In "8-core CPU 7-core GPU", CPU already belongs to the preceding count;
+    // it must not consume the following GPU count as a second CPU variant.
+    const prefixed = [...text.matchAll(prefix)].filter(match => !/\b\d{1,2}\s*(?:[- ]?\s*(?:core|nhan)\s*)?$/.test(text.slice(0,match.index)));
+    return unique([...prefixed, ...text.matchAll(suffix)].map(match => Number(match[1])).filter(value => value > 0 && value <= 80));
   };
   const cpuCounts = counts('cpu'), gpuCounts = counts('gpu');
   if (cpuCounts.length > 1) conflicts.push('Several Apple CPU core-count variants are stated');
