@@ -79,6 +79,68 @@ test('network failover counts every attempt and preserves the replacement route 
   } finally { await client.close(); store.close(); }
 });
 
+for (const stage of ['headers', 'body'] as const) test(`a proxy timeout during ${stage} switches routes and retains request accounting`, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const store = new Store('', true), routes: string[] = [];
+  let started!: () => void, direct = 0;
+  const stalled = new Promise<void>(resolve => { started = resolve; });
+  const pool = new ProxyPool(store, { probe: async () => true, download: catalog(), send: async (uri, _url, init) => {
+    routes.push(uri);
+    if (routes.length > 1) return new Response(page);
+    if (stage === 'headers') return new Promise<Response>((_resolve, reject) => {
+      init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true }); started();
+    });
+    return new Response(new ReadableStream({ start(controller) {
+      init.signal!.addEventListener('abort', () => controller.error(init.signal!.reason), { once: true }); started();
+    } }));
+  } });
+  const client = new ChototClient({ workers: 1, pauseMs: 0, requestStore: store, proxies: pool,
+    fetch: async () => { direct++; return new Response(page); } });
+  client.beginJob({ id: `timeout-${stage}`, category: 'laptop', automatic: false, onRequest() {} });
+  try {
+    const request = client.search({ kind: 'laptop', location: 'danang' });
+    await stalled; t.mock.timers.tick(15_000); await request;
+    await client.search(input);
+    assert.equal(routes.length, 3); assert.notEqual(routes[0], routes[1]); assert.equal(routes[1], routes[2]);
+    assert.equal(pool.status().available, 2); assert.equal(store.sourceBudgetStatus().used, 3); assert.equal(direct, 0);
+  } finally { await client.close(); store.close(); }
+});
+
+test('exhausted timeout routes pause through the existing recovery queue', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const store = new Store('', true); let sent = 0;
+  const starts: Array<() => void> = [];
+  const ready = proxies.map(() => new Promise<void>(resolve => { starts.push(resolve); }));
+  const pool = new ProxyPool(store, { probe: async () => true, download: catalog(), send: async (_uri, _url, init) => {
+    const index = sent++;
+    return new Promise<Response>((_resolve, reject) => {
+      init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true }); starts[index]!();
+    });
+  } });
+  const client = new ChototClient({ workers: 1, pauseMs: 0, requestStore: store, proxies: pool });
+  client.beginJob({ id: 'all-timeouts', category: 'laptop', automatic: false, onRequest() {} });
+  try {
+    const rejected = assert.rejects(client.search({ kind: 'laptop', location: 'danang' }), SourceDeferredError);
+    for (const start of ready) { await start; t.mock.timers.tick(15_000); }
+    await rejected;
+    assert.equal(sent, 3); assert.equal(store.sourceBudgetStatus().used, 3); assert.ok(pool.status().retryAt);
+    await assert.rejects(client.search(input), SourceDeferredError); assert.equal(sent, 3);
+  } finally { await client.close(); store.close(); }
+});
+
+test('caller cancellation during a stalled proxy request does not rotate routes', async () => {
+  const store = new Store('', true), controller = new AbortController(); let sent = 0;
+  const pool = new ProxyPool(store, { probe: async () => true, download: catalog(), send: async (_uri, _url, init) => {
+    sent++; controller.abort(); init.signal!.throwIfAborted(); return new Response(page);
+  } });
+  const client = new ChototClient({ workers: 1, pauseMs: 0, requestStore: store, proxies: pool });
+  client.beginJob({ id: 'cancel-timeout', category: 'laptop', automatic: false, onRequest() {} });
+  try {
+    await assert.rejects(client.search({ kind: 'laptop', location: 'danang', signal: controller.signal }), { name: 'AbortError' });
+    assert.equal(sent, 1); assert.equal(pool.status().available, 3); assert.equal(store.sourceBudgetStatus().used, 1);
+  } finally { await client.close(); store.close(); }
+});
+
 test('three failed proxy attempts pause the job and sanitize connection errors', async () => {
   const store = new Store('', true); let sent = 0;
   const pool = new ProxyPool(store, { probe: async () => true, download: catalog(), send: async () => { sent++; throw new Error('raw upstream secret fixture'); } });

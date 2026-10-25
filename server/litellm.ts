@@ -128,6 +128,7 @@ Keep every unknown reason and conflict explanation concise, at most 220 characte
 Only report unknowns that affect identification, comparison, condition or the price basis of the actual offered item. Fields for hardware not included in this sale are not missing essential specifications: leave them null without adding unknowns. A standalone gpu needs its GPU model, desktop class and VRAM; it does not need a CPU, system RAM, storage or a monitor. Preserve stated GPU memory generation and flag an unstated memory generation for GT 730, GT 1030 or GTX 1650, which have different variants. A laptop needs its model, CPU, graphics class/model, RAM and storage; mobile graphics also need VRAM and Apple integrated graphics need their stated core count. A standalone cpu needs its CPU model, an ssd needs its capacity and storage type, and standalone ram needs its capacity, stick quantity/layout, DDR generation, form factor and speed. A desktop needs the specifications of its offered components; do not require a monitor or peripheral unless the listing bundles one.
 GPU chip variants such as Ti/Super/XT and VRAM/memory generation are essential; optional manufacturer board, cooler or OC names such as Gaming OC or Windforce are not required for this comparison. Do not add unknowns for unstated optional board names. Never infer quantity=1 from a singular item name or a product specification: quantity needs an explicitly stated item/stick count with a verbatim quote. Leave it null if no count is stated. A whole-item priceBasis item does not require a stated count; each/bundle pricing and standalone RAM do require explicit quantity/layout.
 For RAM preserve total GB, number of sticks, per-stick GB, DDR generation, DIMM/SODIMM/soldered, speed and whether the advertised price is per stick or the whole bundle. Do not silently add separate-item prices together.
+ramSpeedMhz must be an integer from 100 through 20000 or null. If the seller states an out-of-range speed, return null and explain the invalid claim in unknowns. Never add or remove zeros to guess a corrected specification.
 Set depositOnly only if this listing's displayed price is a deposit, not if a shop offers optional installment payments. Set damaged/repaired/locked/partsOnly only when it describes the actual offered item. Shop boilerplate saying it buys broken devices, generic repair services, charger options, financing offers, or repair of other products is not damage to this item. New or refurbished condition is not working used condition.
 Multiple model variants or multiple prices without a single clear offered configuration require multiPrice or conflicts. Wanted/buying adverts are wanted, not sale listings. Single clear whole-item asking prices have priceBasis item; each and bundle require explicit quantity or unit context.
 Allowed kinds are laptop, desktop, gpu, ram, cpu, ssd, wanted, other.
@@ -328,6 +329,7 @@ function assessResults(raw: RawListing, decisions: Decisions, extraction: Extrac
 
 interface ClientOptions { key: string; endpoints?: LiteLLMEndpoints; fetch?: typeof fetch; onReceipt?: (receipt: AIReceipt) => void; }
 interface Result<T> { value: T; receipt: AIReceipt; }
+interface ExtractionResult extends Result<Extraction> { warning?: string; }
 interface Recovery { feedback?: string; delayMs?: number; truncated?: boolean; }
 
 /** Only explicitly recoverable failures can spend a second request allowance. */
@@ -347,6 +349,19 @@ function validationFeedback(error: z.ZodError): string {
     const path = issue.path.map(part => typeof part === 'number' ? part : fields.has(String(part)) ? part : '?').join('.') || 'root';
     return `${path} (${issue.code})`;
   }).join(', ');
+}
+
+/** A bad RAM speed must not discard unrelated, independently validated facts. */
+function recoverRamSpeed(value: unknown, error: z.ZodError): Extraction | null {
+  if (!error.issues.length || !error.issues.every(issue => issue.path.length === 2
+    && issue.path[0] === 'profile' && issue.path[1] === 'ramSpeedMhz'
+    && (issue.code === 'too_big' || issue.code === 'too_small'))) return null;
+  // Only range failures qualify. Missing fields, types, extra keys, capacities,
+  // flags and confidence still follow the original strict corrective retry.
+  const candidate = value as Extraction;
+  const parsed = extractionSchema.safeParse({ ...candidate, profile: { ...candidate.profile, ramSpeedMhz: null },
+    evidence: candidate.evidence.filter(item => item.field !== 'ramSpeedMhz') });
+  return parsed.success ? parsed.data : null;
 }
 
 function requestFailure(model: string, error: unknown, signal: AbortSignal, caller?: AbortSignal): Error {
@@ -396,7 +411,9 @@ export class LiteLLMClient {
         confidence: decisions.value.listing_type.confidence, method: 'ai', status: 'Decider: outside the offered hardware scope.' };
     }
     const extraction = await this.#extract(raw, budget, signal);
-    return assessResults(raw, decisions.value, extraction.value);
+    const assessment = assessResults(raw, decisions.value, extraction.value);
+    if (extraction.warning) assessment.status += ` ${extraction.warning}`;
+    return assessment;
   }
 
   async test(budget: RefreshBudget, signal?: AbortSignal): Promise<Array<{ model: string; ok: boolean; error?: string; costUsd?: number }>> {
@@ -443,7 +460,7 @@ export class LiteLLMClient {
     }, signal);
   }
 
-  async #extract(raw: RawListing, budget: RefreshBudget, signal?: AbortSignal): Promise<Result<Extraction>> {
+  async #extract(raw: RawListing, budget: RefreshBudget, signal?: AbortSignal): Promise<ExtractionResult> {
     return this.#withRetry(async recovery => {
       const outputTokens = recovery?.truncated ? RETRY_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS;
       const feedback = recovery?.feedback
@@ -482,10 +499,16 @@ export class LiteLLMClient {
       catch { throw new RetryableAIError('MiMo returned invalid hardware JSON.', { feedback: 'invalid JSON syntax' }); }
       const parsed = extractionSchema.safeParse(decoded);
       if (!parsed.success) {
+        const recovered = recoverRamSpeed(decoded, parsed.error);
+        if (recovered) return { value: recovered, receipt: response.receipt,
+          warning: 'RAM speed was outside the supported range and remains unknown; other validated hardware fields were retained.' };
         const feedback = validationFeedback(parsed.error);
         throw new RetryableAIError(`MiMo returned unsupported or invalid hardware fields: ${feedback}.`, { feedback });
       }
-      return { value: parsed.data, receipt: response.receipt };
+      const speedUnknown = parsed.data.profile.ramSpeedMhz === null
+        ? parsed.data.unknowns.find(item => item.field === 'ramSpeedMhz') : undefined;
+      return { value: parsed.data, receipt: response.receipt,
+        ...(speedUnknown ? { warning: `RAM speed remains unknown: ${speedUnknown.reason}` } : {}) };
     }, signal);
   }
 

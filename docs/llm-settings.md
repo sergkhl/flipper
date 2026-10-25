@@ -15,6 +15,13 @@ Hardware extraction uses JSON-object mode on the exact LiteLLM route
 thinking through `extra_body`. The system prompt includes the full contract
 generated from the local validator and a valid example. The application enforces
 the schema and source quotes; JSON mode alone does not enforce hardware fields.
+An isolated numeric range failure in `profile.ramSpeedMhz` is recovered by leaving
+that field null, removing its accepted evidence and retaining the other strictly
+validated fields. The assessment records the discarded speed in its status;
+standalone RAM still requires a verified speed before comparison. Other schema
+violations retain the bounded corrective retry and conservative fallback.
+Seller typos are not repaired by adding/removing zeros: a plausible range does
+not establish the actual installed speed.
 Classification uses
 `perplexity/pplx-decider-v1.2` on the dedicated Decisions state/questions API.
 Do not prepend `openrouter/` to this Decisions model ID. Model availability needs

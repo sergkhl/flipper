@@ -101,6 +101,15 @@ one connection; each viewport opened exactly one replacement after the deliberat
 disconnect. Idle checks observed no run/job/schedule polling, with no page errors
 or horizontal overflow. These UI checks used no live marketplace/provider calls.
 
+Run recovery validation on 25 October 2026: all 342 application tests passed in
+Node 26, TypeScript/Vite building passed, and all 10 release-policy tests passed
+on the host. New fixtures cover proxy deadlines during headers and body reads,
+exhausted-route deferral, cancellation without route rotation, retained request
+accounting, isolated RAM-speed range recovery, standalone RAM review, strict
+rejection of other invalid fields, and rejection of guessed zero corrections
+without source evidence. These fixtures use no live marketplace or provider
+calls; production recovery is checked separately.
+
 Automated checks establish source behavior. A browser check establishes the
 rendered controls and interactions. A source/provider check establishes the
 specific live request observed. A deployment check must identify the selected

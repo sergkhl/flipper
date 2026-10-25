@@ -4,7 +4,7 @@ export const MIMO_MODEL = 'xiaomi_mimo/mimo-v2.6-flash';
 // OpenRouter withdrew V1.1's endpoint around 2026-10-17; V1.2 is its 27B successor.
 export const DECIDER_MODEL = 'perplexity/pplx-decider-v1.2';
 // Increment when assessment prompts or validation change, so old AI interpretations are not reused.
-export const AI_ASSESSMENT_VERSION = 7;
+export const AI_ASSESSMENT_VERSION = 8;
 export interface LiteLLMEndpoints { chatCompletionsUrl: string; decisionsUrl: string; }
 
 // Read at client creation, after server/index.ts has loaded the project's .env.

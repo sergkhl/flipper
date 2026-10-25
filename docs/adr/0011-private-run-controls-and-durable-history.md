@@ -73,3 +73,17 @@ snapshot; it does not rely on a durable event log or polling fallback. Keep
 checkpoints, seller text, credentials and proxy endpoints outside the stream.
 After a provider fix, bounded focused reassessment can repair affected retained
 listings while preserving the original attempt and its warning.
+
+Follow-up accepted 25 October 2026: marketplace request deadlines, including
+stalled response bodies, retire the affected proxy route and try an available
+replacement. Exhausted routes use the existing durable waiting queue; cancellation
+and source-wide HTTP cooldowns retain precedence. A timeout does not reset request
+accounting, saved progress or AI spending.
+
+An isolated out-of-range RAM speed in otherwise valid MiMo output becomes unknown
+with an assessment explanation. Preserve other schema- and quote-validated fields
+and discard the rejected speed evidence. Do not widen limits or infer a different
+installed speed by adding/removing zeros. Standalone RAM remains in review without
+its required speed; other schema failures keep the existing retry/fallback policy.
+Repair affected retained evidence and explicitly resume failed work while keeping
+the original attempts and their warnings.
