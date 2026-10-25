@@ -132,7 +132,7 @@ test('downtime catches up only the current Vietnam day and midnight never starts
   assert.equal(f.scanner.tick(new Date('2026-10-23T05:00:00Z'))?.category, 'laptop'); await complete(f.service);
 });
 
-test('scheduled budgets remain 0.25 independently of manual settings and overreported cost reduces later admission', async t => {
+test('scheduled budgets cap larger defaults at 0.25 and overreported cost reduces later admission', async t => {
   const f = fixture(t); f.store.saveSettings({ ...f.store.getSettings(), aiBudgetUsd: 3 });
   f.service.configureDailyScans(true, before);
   const first = f.store.claimDailyScan(f.store.getSettings(), noon)!;
@@ -147,7 +147,7 @@ test('scheduled budgets remain 0.25 independently of manual settings and overrep
   assert.equal(f.store.claimDailyScan(f.store.getSettings(), noon), null);
 });
 
-test('the actual scheduled AI client gets the fixed budget while manual assessment gets its configured budget', async t => {
+test('the actual scheduled AI client gets the capped budget while manual assessment gets its configured budget', async t => {
   const f = fixture(t), limits: number[] = [];
   f.store.saveSettings({ ...f.store.getSettings(), aiEnabled: true, aiBudgetUsd: 2 });
   t.mock.method(f.store, 'getKey', () => 'fixture-only-key');

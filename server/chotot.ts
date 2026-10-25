@@ -1,5 +1,6 @@
 import type { Condition, HardwareKind, RawListing } from '../shared/types.ts';
 import type { SourceCooldown } from '../shared/types.ts';
+import { MAX_RUN_WORKERS } from '../shared/run-settings.ts';
 import { activeCooldown, retryAfterMs, SourceCooldownError, type CooldownStore } from './source-cooldown.ts';
 import { SourceDeferredError, SOURCE_INTERVAL_MS, SOURCE_WORKERS, type SourceRequestContext, type SourceRequestStore } from './source-policy.ts';
 import type { ProxyPool } from './proxies.ts';
@@ -264,10 +265,10 @@ export class ChototClient {
     this.cooldownStore = cooldownStore;
     this.now = now;
     this.requestStore = requestStore; this.proxies = proxies;
-    this.workerLimit = Math.max(1, Math.min(8, workers ?? (proxies ? SOURCE_WORKERS : 1)));
+    this.workerLimit = Math.max(1, Math.min(MAX_RUN_WORKERS, workers ?? (proxies ? SOURCE_WORKERS : 1)));
   }
   beginJob(context: SourceRequestContext): void {
-    if (context.workers !== undefined) this.workerLimit = Math.max(1, Math.min(8, context.workers));
+    if (context.workers !== undefined) this.workerLimit = Math.max(1, Math.min(MAX_RUN_WORKERS, context.workers));
     this.context = context; this.jobError = null; this.workers = []; this.starting = null; this.proxies?.beginJob();
   }
   endJob(): void { this.context = null; this.jobError = null; this.workers = []; this.starting = null; }

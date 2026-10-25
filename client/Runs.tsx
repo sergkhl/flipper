@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowRight, ChevronDown, LoaderCircle, Play, RefreshCw, Settings2, TriangleAlert } from 'lucide-react';
-import type { AppSettings, Category, RefreshJob, RunLimits, RunParameters, RunSummary, RunsResponse } from '../shared/types';
+import { ArrowRight, ChevronDown, LoaderCircle, Play, RefreshCw, Save, Settings2, TriangleAlert } from 'lucide-react';
+import type { AdminBootstrapResponse, AppSettings, Category, RefreshJob, RunLimits, RunParameters, RunSummary, RunsResponse } from '../shared/types';
+import { MAX_RUN_WORKERS, runParameters } from '../shared/run-settings';
 import { message, post, request } from './api';
 import { categoryLabels, usd } from './format';
 import Drawer from './Drawer';
@@ -11,11 +12,12 @@ const activeStates = ['collecting', 'assessing', 'comparing'];
 const stamp = (value: string | null) => value ? new Date(value).toLocaleString() : '—';
 const title = (run: RunSummary) => `${categoryLabels[run.job.category]}${run.listingId ? ' · listing analysis' : run.job.query ? ` · ${run.job.query}` : ' · market refresh'}`;
 
-export default function Runs({ settings, activity, onJob, onResults }: {
+export default function Runs({ settings, activity, onJob, onResults, onDefaultsSaved }: {
   settings: AppSettings;
   activity: RunActivityState;
   onJob: (job: RefreshJob) => void;
   onResults: (run: RunSummary) => void;
+  onDefaultsSaved: (bootstrap: AdminBootstrapResponse) => void;
 }) {
   const [data, setData] = useState<RunsResponse | null>(null);
   const [offset, setOffset] = useState(0);
@@ -33,9 +35,14 @@ export default function Runs({ settings, activity, onJob, onResults }: {
   const dirtyRef = useRef(false);
   const [category, setCategory] = useState<Category>('laptop');
   const [query, setQuery] = useState('');
-  const [parameters, setParameters] = useState<RunParameters>(() => ({ scanLimit: settings.scanLimit,
-    benchmarkLimit: settings.benchmarkLimit, aiBudgetUsd: settings.aiBudgetUsd, aiEnabled: settings.aiEnabled,
-    minRamGb: settings.minRamGb, minVramGb: settings.minVramGb, includeUnknownMemory: settings.includeUnknownMemory }));
+  const [parameters, setParameters] = useState<RunParameters>(() => runParameters(settings));
+  const previousDefaults = useRef(runParameters(settings));
+  const defaultsDirty = Object.entries(runParameters(settings)).some(([key, value]) => parameters[key as keyof RunParameters] !== value);
+  useEffect(() => {
+    const previous = previousDefaults.current, next = runParameters(settings);
+    setParameters(current => Object.entries(previous).every(([key, value]) => current[key as keyof RunParameters] === value) ? next : current);
+    previousDefaults.current = next;
+  }, [settings]);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     const result = await request<RunsResponse>(`/runs?offset=${offset}`, { signal });
@@ -85,9 +92,16 @@ export default function Runs({ settings, activity, onJob, onResults }: {
     onJob(job); setDetail(null); setSelected(job.id);
     setNotice(action === 'cancel' ? 'Cancellation requested. Saved progress remains available.' : 'Run accepted. Progress appears below.');
   });
-  const launch = (event: FormEvent) => {
+  const launch = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const saveDefaults = (event.nativeEvent as SubmitEvent).submitter?.getAttribute('name') === 'save-defaults';
     void mutate(async () => {
+      if (saveDefaults) {
+        const result = await post<AdminBootstrapResponse>('/settings', parameters);
+        onDefaultsSaved(result);
+        setNotice('Defaults saved for future manual and daily runs. Existing runs retain their captured parameters.');
+        return;
+      }
       const { job } = await post<{ job: RefreshJob }>('/runs', { category, query, parameters });
       onJob(job); setOffset(0); setDetail(null); setSelected(job.id); setNotice('Run started. You can leave this page while it runs.');
     });
@@ -140,13 +154,17 @@ export default function Runs({ settings, activity, onJob, onResults }: {
           <label className="run-check"><input type="checkbox" checked={parameters.includeUnknownMemory} onChange={e => setParameters(p => ({ ...p, includeUnknownMemory: e.target.checked }))} />Include unknown memory</label>
           <label className="run-check"><input type="checkbox" checked={parameters.aiEnabled} onChange={e => setParameters(p => ({ ...p, aiEnabled: e.target.checked }))} />Use AI when configured</label>
           <p className="run-form-note">An empty search refreshes the category. Collection includes specification extraction and bounded nationwide comparisons. For one listing, use “Refresh this evidence” in its details.</p>
-          <button className="button primary" disabled={busy} type="submit"><Play size={15} />Start run</button>
+          <p className="run-form-note">Save defaults to reuse these settings across visits and future manual and daily runs. Daily AI spending remains capped at $0.25 per category. Category and model search apply to this launch.</p>
+          <div className="run-actions">
+            <button className="button primary" disabled={busy} type="submit"><Play size={15} />Start run</button>
+            <button className="button" disabled={busy || !defaultsDirty} type="submit" name="save-defaults"><Save size={15} />Save defaults</button>
+          </div>
         </form>
       </details>
       <details className="run-panel"><summary><Settings2 size={17} /> Workers & request limits <ChevronDown size={16} /></summary>
         {limits && <form onSubmit={saveLimits} className="run-form">
-          <NumberField label="Marketplace workers" value={limits.marketplaceWorkers} min={1} max={8} onChange={v => updateLimit('marketplaceWorkers', v)} />
-          <NumberField label="AI workers" value={limits.aiWorkers} min={1} max={8} onChange={v => updateLimit('aiWorkers', v)} />
+          <NumberField label="Marketplace workers" value={limits.marketplaceWorkers} min={1} max={MAX_RUN_WORKERS} onChange={v => updateLimit('marketplaceWorkers', v)} />
+          <NumberField label="AI workers" value={limits.aiWorkers} min={1} max={MAX_RUN_WORKERS} onChange={v => updateLimit('aiWorkers', v)} />
           <NumberField label="Total requests / 24h" value={limits.requestLimit} min={1} onChange={v => updateLimit('requestLimit', v)} />
           <NumberField label="Automatic requests / 24h" value={limits.automaticRequestLimit} min={1} max={limits.requestLimit} onChange={v => updateLimit('automaticRequestLimit', v)} />
           <NumberField label="Automatic requests / category / 24h" value={limits.automaticCategoryRequestLimit} min={1} max={limits.automaticRequestLimit} onChange={v => updateLimit('automaticCategoryRequestLimit', v)} />

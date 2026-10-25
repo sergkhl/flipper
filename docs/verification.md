@@ -53,7 +53,7 @@ Run-control tests cover durable manual failures, cancellation and explicit resum
 restart interruption with uncertain AI accounting, immutable targets/filters and
 AI budgets, attempt families, 90-day resolved-history retention, private API
 redaction, stale-attempt rejection, maintenance cancellation, and request-limit
-changes without ledger resets. Worker tests exercise 1, 2 and 8 marketplace slots
+changes without ledger resets. Worker tests exercise 1, 2, 8 and 20 marketplace slots
 and AI limits independently of marketplace concurrency. Browser checks exercise
 launch, retry, cancellation, persisted limit edits and anonymous access at desktop
 and mobile sizes against synthetic sources.
@@ -109,6 +109,27 @@ accounting, isolated RAM-speed range recovery, standalone RAM review, strict
 rejection of other invalid fields, and rejection of guessed zero corrections
 without source evidence. These fixtures use no live marketplace or provider
 calls; production recovery is checked separately.
+
+Run-default and price-basis validation on 25 October 2026: all 348 application
+tests and the Node 26 TypeScript/Vite production build passed. New fixtures cover
+the two observed multi-price aliases, retained hardware/source-quote validation,
+price review after local reconciliation, combined RAM-speed recovery, and strict
+rejection of other invalid values/fields. Persistence checks cover the one-time
+100-to-200 upgrade, later explicit choices, all seven run defaults across restart,
+future manual/daily admission, preserved prior parameters and worker counts,
+lower daily AI allowances, and the 20-worker limit in the API and both pools.
+
+Offline replay of six privately retained MiMo responses through the decoder,
+schema and source-quote validation recovered all six with an unknown price basis
+and review status, without another extraction call. The Decider responses were
+synthetic for this replay; no live provider requests were made.
+
+Synthetic browser checks at 1440×1000 and 390×844 verified explicit saving without
+launching, persistence across reloads and separate browser sessions, one-off run
+overrides, saved worker values of 20, rejection of 21, and valid Settings controls
+after saving non-round targets. Both sizes had no page errors or horizontal
+overflow. The browser fixture used an isolated database and synthetic source;
+these checks do not establish a production deployment or live source availability.
 
 Automated checks establish source behavior. A browser check establishes the
 rendered controls and interactions. A source/provider check establishes the

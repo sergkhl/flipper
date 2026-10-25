@@ -78,8 +78,8 @@ whole-system, accessory, wanted, or multi-model advertisements.
 At most 700 Chợ Tốt HTTP attempts in a rolling 24 hours, shared by all manual,
 automatic, recovery and proxy routes, including retries and redirects. Automatic
 work can consume at most 150 per category and 450 total. At least 250 are reserved
-for manual work, which can also use the remaining total allowance. Up to four
-workers run concurrently, each with at least three seconds between starts.
+for manual work, which can also use the remaining total allowance. Four workers
+run concurrently by default, configurable from 1 to 20, each with at least three seconds between starts.
 The shared ledger and worker/proxy pacing survive restarts.
 
 **Proxy worker**:
@@ -91,17 +91,21 @@ and source-wide cooldown; fewer workers continue when fewer routes work.
 A scan or focused analysis waiting for request allowance, a source cooldown or
 a proxy. Its observations, pagination and original AI spending are retained for
 automatic resumption. Overlapping automatic category work shares one queue entry
-with the latest settings; focused manual listings retain separate scopes.
+with its captured settings; focused manual listings retain separate scopes.
 
-Collection defaults to 100 local listings, ten initial detail reads and at most
+Collection defaults to 200 local listings, ten initial detail reads and at most
 60 national offers per query, stopping once enough valid independent comparisons
 exist. Automatic PC work uses at most two adjustment-part searches per
 configuration; partial component baseline searches run on demand. Public HTTPS
 marketplace traffic uses stable worker proxies from the two configured runtime
 lists, switching only on connection/proxy errors. Unavailable proxies pause work
-without direct fallback; HTTP 429 retains the global source cooldown. Up to four
-AI assessment workflows run concurrently over direct gateway connections with
-shared spending reservations. See ADRs 0009 and 0010.
+without direct fallback; HTTP 429 retains the global source cooldown. Four
+AI assessment workflows run concurrently by default, independently configurable
+from 1 to 20 over direct gateway connections with shared spending reservations.
+The Runs form can explicitly save its seven parameter defaults on the server
+for future manual and daily work. Category/search remain launch-specific;
+existing runs and recoveries retain their captured parameters. Daily AI allowances
+use the saved default subject to the USD 0.25 category ceiling. See ADRs 0009–0011.
 
 **Reference price**:
 A filtered arithmetic mean of matching nationwide used Chợ Tốt asking-price

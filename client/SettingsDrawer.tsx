@@ -283,8 +283,8 @@ export default function SettingsDrawer({
             </div>
           </div>
           <NumberField
-            label="AI budget per manual refresh"
-            unit="USD · cached assessments avoid repeat charges"
+            label="Default AI allowance per run"
+            unit="USD · daily scans cap each category at $0.25"
             value={draft.aiBudgetUsd}
             min={0}
             max={10}
@@ -368,11 +368,11 @@ export default function SettingsDrawer({
           <div className="settings-grid">
             <NumberField
               label="Local listings per scan"
-              unit="20–1,000 recent results"
+              unit="1–1,000 recent results"
               value={draft.scanLimit}
-              min={20}
+              min={1}
               max={1000}
-              step={20}
+              step={1}
               onChange={(value) => update("scanLimit", value)}
             />
             <NumberField
@@ -381,17 +381,19 @@ export default function SettingsDrawer({
               value={draft.benchmarkLimit}
               min={20}
               max={60}
-              step={20}
+              step={1}
               onChange={(value) => update("benchmarkLimit", value)}
             />
           </div>
           <div className="settings-method-note">
             <ShieldCheck size={17} />
             <p>
-              Collection shares a limit of 700 marketplace requests per rolling
-              24 hours, with 150 per automatic category. Up to four proxy workers
-              run concurrently, each starting requests at least 3 seconds apart.
-              AI assessments use up to four concurrent calls within the same budget.
+              Collection shares a limit of {draft.requestLimit} marketplace requests per rolling
+              24 hours, with {draft.automaticCategoryRequestLimit} per automatic category. Marketplace and AI
+              workers can each be set from 1 to 20 in Runs, defaulting to four.
+              Each marketplace worker starts requests at least 3 seconds apart;
+              active concurrency also depends on available verified proxy routes.
+              AI assessments share the same run budget.
               Automatic comparisons use at most two adjustment-part searches per
               configuration; partial component baselines are retrieved on demand.
             </p>

@@ -1,10 +1,11 @@
 import type { AppSettings, HardwareProfile } from '../shared/types.ts';
+import { DEFAULT_SCAN_LIMIT } from '../shared/run-settings.ts';
 
 export const MIMO_MODEL = 'xiaomi_mimo/mimo-v2.6-flash';
 // OpenRouter withdrew V1.1's endpoint around 2026-10-17; V1.2 is its 27B successor.
 export const DECIDER_MODEL = 'perplexity/pplx-decider-v1.2';
 // Increment when assessment prompts or validation change, so old AI interpretations are not reused.
-export const AI_ASSESSMENT_VERSION = 8;
+export const AI_ASSESSMENT_VERSION = 9;
 export interface LiteLLMEndpoints { chatCompletionsUrl: string; decisionsUrl: string; }
 
 // Read at client creation, after server/index.ts has loaded the project's .env.
@@ -22,7 +23,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   discountPercent: 10, minComparables: 5, minProfit: 500_000,
   minRoiPercent: 15, resaleFactor: 0.9,
   costReserves: { laptop: 500_000, desktop: 500_000, gpu: 200_000 },
-  aiBudgetUsd: 0.25, scanLimit: 100, benchmarkLimit: 60, aiEnabled: true,
+  aiBudgetUsd: 0.25, scanLimit: DEFAULT_SCAN_LIMIT, benchmarkLimit: 60, aiEnabled: true,
 };
 export const EMPTY_PROFILE: HardwareProfile = {
   model: null, cpu: null, gpu: null, gpuClass: null, vramGb: null,

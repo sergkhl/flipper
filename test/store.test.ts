@@ -9,6 +9,26 @@ import { raw, assessment } from './helpers.ts';
 import { buildReference } from '../server/pricing.ts';
 import { enrichComputerAssessment } from '../server/computer.ts';
 import { assessWithRules } from '../server/hardware.ts';
+import { DEFAULT_SETTINGS } from '../server/config.ts';
+
+test('the former 100-listing default upgrades once while explicit later defaults and worker counts persist', () => {
+  const Database = ('Database' in sqlite ? sqlite.Database : sqlite.DatabaseSync) as typeof sqlite.DatabaseSync;
+  for (const [previous, expected] of [[100, 200], [80, 80]]) {
+    const directory = mkdtempSync(join(tmpdir(), 'flipper-default-upgrade-'));
+    const original = { ...DEFAULT_SETTINGS, scanLimit: previous!, marketplaceWorkers: 8, aiWorkers: 8, aiBudgetUsd: .15 };
+    const db = new Database(join(directory, 'flipper.sqlite'));
+    db.exec('CREATE TABLE settings (id INTEGER PRIMARY KEY, json TEXT NOT NULL)');
+    db.prepare('INSERT INTO settings(id,json) VALUES(1,?)').run(JSON.stringify(original));
+    db.close();
+    let store = new Store(directory);
+    try {
+      assert.deepEqual(store.getSettings(), { ...original, scanLimit: expected });
+      store.saveSettings({ ...store.getSettings(), scanLimit: 100 });
+      store.close(); store = new Store(directory);
+      assert.deepEqual(store.getSettings(), { ...original, scanLimit: 100 });
+    } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+  }
+});
 
 test('history records price changes, query snapshots and saved state survive restart', () => {
   const directory = mkdtempSync(join(tmpdir(), 'flipper-store-'));
