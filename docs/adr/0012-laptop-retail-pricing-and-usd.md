@@ -21,7 +21,8 @@ labeled fallback. Foreign prices lacking a known complete Vietnam purchase cost
 are indicative and do not displace local history. Source URLs, native amounts,
 currency, configuration, price date, release provenance and observation date stay
 with the evidence. TechAPI MSRP and verification flags are never accepted on
-their own. Initial reviewed history covers four M1 MacBook base configurations;
+their own. Reviewed coverage and source evidence are maintained in
+[data sources](../data-sources.md) and the configuration price book;
 unsupported configurations remain unpriced, rather than receiving invented prices.
 
 Historical retained-value policy v1 uses linear interpolation between these

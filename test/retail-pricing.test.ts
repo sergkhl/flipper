@@ -101,6 +101,55 @@ test('post-launch prices beyond 90 days and unverified release dates are not his
   assert.equal(result(lookup(),[{...base,priceDate:'2022-01-01'}]).reference,null);
   assert.equal(result(lookup(),[{...base,releaseSourceUrl:null}]).reference,null);
 });
+test('Surface Plus identity and explicit Intel aliases match without guessing a CPU or merging variants', () => {
+  const plus = LAPTOP_LAUNCH_PRICES.find(o => o.id === 'microsoft-hk-pro7plus-i5-1135g7-8-256-wifi')!.profile;
+  assert.equal(retailMatch({...plus,model:'Surface Pro 7 Plus',cpu:'Intel Core i5 11th 1135G7 Tiger Lake'},plus),'exact');
+  assert.equal(retailMatch({...plus,cpu:'Intel Core i5-1135G7'},plus),'exact');
+  assert.equal(retailMatch({...plus,model:'Surface Pro 7',cpu:null},plus),'different');
+  assert.equal(retailMatch({...plus,cpu:null},plus),'partial');
+  for (const cpu of ['Intel Core i5 11th', 'Intel Core i5 10th 1135G7 Tiger Lake',
+    'Intel Core i5 11th 1035G4 Tiger Lake', 'I5-1135G7 / I7-1165G7', 'I5-1135G7E']) {
+    assert.equal(retailMatch({...plus,cpu},plus),'different',cpu);
+  }
+  for (const change of [{ramGb:16},{storageGb:500},{ramType:'LPDDR4'},{gpu:'Intel UHD Graphics'}]) {
+    assert.equal(retailMatch({...plus,...change},plus),'different');
+  }
+});
+test('reviewed launch rows have unique identities, configuration evidence and dates inside the original 90-day window', () => {
+  assert.equal(new Set(LAPTOP_LAUNCH_PRICES.map(o => o.id)).size,LAPTOP_LAUNCH_PRICES.length);
+  for (const row of LAPTOP_LAUNCH_PRICES) {
+    assert.notEqual(row.basis,'current_new',row.id); assert.equal(row.available,false,row.id);
+    assert.ok(row.amount > 0 && Number.isFinite(row.amount),row.id);
+    const days = (Date.parse(row.priceDate!)-Date.parse(row.releaseDate!))/86_400_000;
+    assert.ok(days >= 0 && days <= 90,row.id);
+    for (const url of [row.url,row.releaseSourceUrl,row.configurationSourceUrl]) assert.equal(new URL(url!).protocol,'https:',row.id);
+    assert.equal(retailMatch(row.profile,row.profile),'exact',row.id);
+  }
+});
+test('Surface commercial launch prices retain Wi-Fi/LTE ranges and foreign estimates never award a deal badge', () => {
+  const target = LAPTOP_LAUNCH_PRICES.find(o => o.id === 'microsoft-hk-pro7plus-i5-1135g7-8-256-wifi')!.profile;
+  const rates = {...fx,rates:{...fx.rates,HKD:7.8474,SGD:1.2775}};
+  const ref = laptopReference(target,lookup(),LAPTOP_LAUNCH_PRICES,rates,now).reference!;
+  assert.equal(ref.kind,'historical_depreciation'); assert.equal(ref.retail?.indicative,true);
+  assert.deepEqual(ref.retail?.sources.map(o => o.amount),[10_788,11_888]);
+  assert.match(ref.retail!.reasons.join(' '),/Foreign launch price/);
+  assert.ok(ref.min < ref.max);
+  const v = valueListing(raw('surface',Math.round(ref.min/2),{category:'laptop'}),assessment(target,{kind:'laptop'}),ref,DEFAULT_SETTINGS,EMPTY_STATE);
+  assert.equal(v.opportunity,false);
+  const i5Base = LAPTOP_LAUNCH_PRICES.filter(o => o.id.startsWith('microsoft-hk-pro7plus-i5-1135g7-8-128'));
+  assert.deepEqual(i5Base.map(o => o.amount),[8_188,9_388],'restricted EDU price is excluded');
+});
+test('new MacBook launch prices apply only to documented configurations and current retail still wins', () => {
+  const base = LAPTOP_LAUNCH_PRICES.find(o => o.id === 'apple-vn-air-m4-13-16-256')!;
+  assert.equal(result(lookup(),LAPTOP_LAUNCH_PRICES,base.profile).reference?.retail?.indicative,false);
+  assert.equal(result(lookup(),LAPTOP_LAUNCH_PRICES,{...base.profile,storageGb:512,gpuCores:10}).reference,null);
+  const m2 = LAPTOP_LAUNCH_PRICES.find(o => o.id === 'fpt-air-m2-8-256')!;
+  assert.equal(m2.releaseDate,'2022-07-08','age starts at first orders, not the June announcement');
+  assert.equal(result(lookup(),LAPTOP_LAUNCH_PRICES,{...m2.profile,ramGb:16}).reference,null);
+  const ref = result(lookup([offer({profile:base.profile,amount:20_000_000})]),LAPTOP_LAUNCH_PRICES,base.profile).reference!;
+  assert.equal(ref.kind,'retail_new'); assert.equal(ref.retail?.retention,null);
+  assert.equal(ref.retail?.referenceUsd,20_000_000/fx.rates.VND);
+});
 test('retail and FX expire at seven days, with no new USD verdict from stale FX', () => {
   assert.equal(freshDate(at,now+PRICE_CACHE_MS-1),true); assert.equal(freshDate(at,now+PRICE_CACHE_MS),false);
   assert.equal(validFx(fx,now+PRICE_CACHE_MS-1),true); assert.equal(validFx(fx,now+PRICE_CACHE_MS),false);

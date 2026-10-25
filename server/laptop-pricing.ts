@@ -1,6 +1,6 @@
 import type { HardwareProfile, ReferencePrice } from '../shared/types.ts';
 import { freshDate, toUsd, validFx, type FxSnapshot, type LaptopClass, type LaptopPriceEvidence, type RetailLookup, type RetailPrice } from '../shared/retail.ts';
-import { normalize } from './hardware.ts';
+import { cpuModels, normalize } from './hardware.ts';
 
 export const LAPTOP_PRICE_POLICY = 1;
 export const RETENTION: Record<LaptopClass, readonly number[]> = {
@@ -11,17 +11,32 @@ const YEAR_MS = 365.25 * 86_400_000;
 const key = (value: string | null | undefined) => normalize(value ?? '').replace(/^(?:apple|dell|lenovo|hp|asus|acer|msi|intel core)\s+/, '').replace(/[^a-z0-9]/g, '');
 const silicon = (p: HardwareProfile) => /^(?:apple(?: silicon)? )?m\d+\b/i.test(p.cpu ?? '');
 
+function cpuKey(value: string | null): string | null {
+  const text = normalize(value ?? '');
+  if (cpuModels(text).length > 1) return null;
+  // Normalize only a complete stated Intel identifier and known redundant text.
+  // A family/generation alone is never expanded into an assumed processor SKU.
+  const intel = text.match(/^(?:intel(?: core)?\s+)?(i[3579])\s*[- ]?\s*(?:(\d{1,2})(?:st|nd|rd|th)(?:\s+gen(?:eration)?)?\s+)?(\d{4,5}(?:g[147]|[a-z]{0,3}))(?:\s+(tiger lake))?$/);
+  if (!intel) return key(value);
+  const [, family, statedGeneration, sku, architecture] = intel;
+  const generation = /^(?:10|11|12|13|14)/.test(sku) ? sku.slice(0,2) : sku[0];
+  if (statedGeneration && statedGeneration !== generation || architecture && generation !== '11') return null;
+  return key(`${family}-${sku}`);
+}
+
 /** Unknown fields permit a displayed range, never an exact-configuration verdict. */
 export function retailMatch(a: HardwareProfile, b: HardwareProfile): 'exact' | 'partial' | 'different' {
   const model = (p: HardwareProfile) => normalize(p.model ?? '').match(/mac\s*book\s*(air|pro|neo)/)?.[0].replace(/\s+/g,'')
-    ?? key(p.model).replace(/20\d{2}/g, '');
+    ?? key(p.model?.replace(/\+/g, ' plus ')).replace(/20\d{2}/g, '');
   if (!a.model || !b.model || model(a) !== model(b)) return 'different';
   let partial = false;
   const compare = (left: unknown, right: unknown, required = true) => {
     if (left == null || right == null || left === '' || right === '') { if (required) partial = true; return true; }
     return left === right;
   };
-  if (!compare(key(a.cpu), key(b.cpu)) || !compare(a.ramGb, b.ramGb) || !compare(a.storageGb, b.storageGb)
+  const aCpu = cpuKey(a.cpu), bCpu = cpuKey(b.cpu);
+  if (aCpu === null || bCpu === null) return 'different';
+  if (!compare(aCpu, bCpu) || !compare(a.ramGb, b.ramGb) || !compare(a.storageGb, b.storageGb)
     || !compare(a.modelYear, b.modelYear, false) || !compare(a.gpuClass, b.gpuClass)) return 'different';
   const mac = /macbook/.test(model(a));
   if (mac) {
@@ -126,7 +141,7 @@ export function laptopReference(profile: HardwareProfile, lookup: RetailLookup |
     const classes = kind ? [kind] : Object.keys(RETENTION) as LaptopClass[];
     values = sources.flatMap((o,i) => classes.flatMap(c => ages[i]!.map(age => toUsd(o.amount,o.currency,fx)! * retainedFraction(c,age))));
     originalUsd = toUsd(sources[0].amount,sources[0].currency,fx)!;
-    if (new Set(sources.map(o => toUsd(o.amount,o.currency,fx))).size > 1) reasons.push('Original-price sources conflict; the estimate is a range.');
+    if (new Set(sources.map(o => toUsd(o.amount,o.currency,fx))).size > 1) reasons.push('Original prices differ across sources or possible configurations; the estimate is a range.');
     if (kind && ageRange[0] === ageRange[1]) retention = retainedFraction(kind,ageRange[0]);
   }
   const range: [number,number] = [Math.min(...values),Math.max(...values)], referenceUsd = range[0];
