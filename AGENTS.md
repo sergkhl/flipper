@@ -23,3 +23,31 @@ into the published repository to repair a stale local branch.
 Use `docs/deployment.md` for release mechanics and rollback. An emergency image
 rollback can select the previously verified detached revision; the next routine
 deployment must return to the primary `main` workflow above.
+
+## Product decisions and compatibility
+
+The owner is Flipper's only user and administrator. Base decisions on the actual
+deployment rather than hypothetical users, older clients, or other installations.
+
+Breaking changes are allowed. Prefer a coherent implementation over compatibility
+layers, deprecated fields, dual paths, or migrations that existing deployed data
+does not require. Keep documentation and ADRs aligned with the current design;
+update or remove outdated material without preserving superseded decision history
+or adding deprecation notes.
+
+## Database evidence and reset authority
+
+Before asking about existing records, saved searches, price sources, caches, or
+migration needs, inspect the relevant code, configured sources, and deployed
+database. Identify the deployment target and the running container's actual data
+mount; do not substitute test fixtures, an unverified local database, or old
+documentation for deployed evidence. Inspect only the data needed and do not
+expose credentials or private record contents.
+
+The owner gives standing authorization to clear, drop, or recreate Flipper's
+database, tables, and caches when needed to complete a task, without asking for
+confirmation again. This authorization remains in effect until the owner
+explicitly revokes or narrows it. A reset must serve the task; permission alone
+is not a reason to reset data. It does not authorize deleting credentials,
+unrelated services or their data, or the primary checkout, and does not permit
+removing runtime data as worktree cleanup.

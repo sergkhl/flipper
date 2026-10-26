@@ -22,7 +22,7 @@ const product = { '@type':'Product',name:'Laptop Apple MacBook Air M1 13.3 inch 
     shippingDetails:{shippingRate:{value:'0',currency:'VND'},shippingDestination:{addressCountry:'VN'}}} };
 const html = (p:unknown) => `<script type="application/ld+json">${JSON.stringify(p)}</script>`;
 
-test('FX is persisted across restarts, coalesced and reused for exactly seven days, then fails closed', async () => {
+test('FX persists across restarts, coalesces, refreshes at seven days and retains the last verified rates on failure', async () => {
   const directory = mkdtempSync(join(tmpdir(),'flipper-prices-'));
   let now = Date.parse('2026-10-25T12:00:00Z'), calls = 0, fail = false;
   const fetcher: typeof fetch = async () => { calls++; if (fail) throw new Error('provider unavailable');
@@ -34,7 +34,7 @@ test('FX is persisted across restarts, coalesced and reused for exactly seven da
     store.close(); store = new Store(directory);
     const restarted = new ExchangeRates(store,fetcher,() => now);
     now += PRICE_CACHE_MS-1; fail = true; await restarted.warm(); assert.equal(calls,1); assert.ok(restarted.snapshot());
-    now++; await restarted.warm(); assert.equal(calls,2); assert.equal(restarted.snapshot(),null);
+    now++; await restarted.warm(); assert.equal(calls,2); assert.equal(restarted.snapshot()?.rates.VND,25_000);
     assert.match(store.runtimeValue<{error:string}>('prices:fx:last-error')!.error,/unavailable/);
     await restarted.warm(); assert.equal(calls,2,'failed refresh is backed off');
   } finally {store.close();rmSync(directory,{recursive:true,force:true});}
@@ -47,6 +47,33 @@ test('invalid, future and stale provider rates cannot be cached as a current USD
     const rates = new ExchangeRates(cache(),async () => Response.json([row]),() => now);
     await rates.warm(); assert.equal(rates.snapshot(),null);
   }
+});
+test('foreign references survive failed FX refresh and restart, then recalculate when rates recover', async () => {
+  const directory = mkdtempSync(join(tmpdir(),'flipper-foreign-prices-'));
+  let now = Date.now(), calls = 0, fail = false, rate = 25_000;
+  const fetcher: typeof fetch = async () => {
+    calls++; if (fail) throw new Error('FX unavailable');
+    return Response.json([{base:'USD',quote:'VND',rate,date:new Date(now).toISOString().slice(0,10)}]);
+  };
+  const p = LAPTOP_LAUNCH_PRICES[0].profile;
+  const source = {lookup:async ():Promise<RetailLookup> => ({status:'complete',checkedAt:new Date(now).toISOString(),errors:[],offers:[{
+    ...LAPTOP_LAUNCH_PRICES[0],basis:'current_new',available:true,currency:'USD',amount:1_000,observedAt:new Date(now).toISOString(),
+  }]})};
+  let store = new Store(directory);
+  const book = () => new LaptopPriceBook(store,source,() => now,[],new ExchangeRates(store,fetcher,() => now));
+  try {
+    let prices = book(); await prices.warm(p);
+    assert.equal(prices.reference(p).reference?.average,25_000_000); assert.equal(calls,1);
+    now += PRICE_CACHE_MS; fail = true; await prices.warm(p);
+    assert.equal(prices.reference(p).reference?.average,25_000_000);
+    assert.equal(prices.reference(p).reference?.retail?.fxStale,true); assert.equal(calls,2);
+    store.close(); store = new Store(directory); prices = book();
+    assert.equal(prices.reference(p).reference?.retail?.fxStale,true,'offline reads retain stale conversion across restarts');
+    assert.equal(calls,2,'reading a reference never refreshes FX');
+    fail = false; rate = 30_000; await prices.warm(p);
+    assert.equal(prices.reference(p).reference?.average,30_000_000);
+    assert.equal(prices.reference(p).reference?.retail?.fxStale,false); assert.equal(calls,3);
+  } finally {store.close();rmSync(directory,{recursive:true,force:true});}
 });
 test('retail lookup caches positive and empty results for seven days, persists failures, and coalesces a configuration', async () => {
   const data = cache(), p = LAPTOP_LAUNCH_PRICES[0].profile;

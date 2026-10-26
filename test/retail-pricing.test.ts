@@ -7,7 +7,7 @@ import { LAPTOP_LAUNCH_PRICES } from '../server/laptop-launch-prices.ts';
 import { valueListing } from '../server/pricing.ts';
 import { EMPTY_STATE } from '../server/store.ts';
 import { raw, assessment } from './helpers.ts';
-import { originalMoney, money, setExchangeRates } from '../client/format.ts';
+import { originalMoney, money, compactMoney, usd } from '../client/format.ts';
 
 const now = Date.now(), at = new Date(now).toISOString();
 export const profile = {...LAPTOP_LAUNCH_PRICES[0].profile};
@@ -24,8 +24,8 @@ function result(current: RetailLookup | null, history = LAPTOP_LAUNCH_PRICES, ta
 
 test('current exact retail wins over original depreciation, selecting the lowest verified complete Vietnam cash cost', () => {
   const ref = result(lookup([offer({id:'higher',amount:22_000_000}),offer(),offer({id:'foreign',amount:200,currency:'USD',market:'US',shipsToVietnam:false})])).reference!;
-  assert.equal(ref.kind,'retail_new'); assert.equal(ref.retail?.referenceUsd,20_000_000/fx.rates.VND);
-  assert.equal(ref.retail?.retention,null); assert.equal(ref.retail?.originalUsd,null);
+  assert.equal(ref.kind,'retail_new'); assert.equal(ref.retail?.referenceVnd,20_000_000);
+  assert.equal(ref.retail?.retention,null); assert.equal(ref.retail?.originalVnd,null);
   assert.equal(ref.retail?.sources[0].id,'retail'); assert.equal(ref.retail?.indicative,false);
 });
 test('any amount below new retail qualifies before rounding; exact equality and above do not', () => {
@@ -42,7 +42,7 @@ test('historical depreciation requires a successful current-price absence check 
   assert.equal(ref.kind,'historical_depreciation'); assert.equal(ref.retail?.indicative,false);
   const age = (now-Date.parse(LAPTOP_LAUNCH_PRICES[0].releaseDate!))/(365.25*86_400_000);
   assert.equal(ref.retail?.ageYears,age);
-  assert.equal(ref.retail?.referenceUsd,28_990_000/fx.rates.VND*retainedFraction('apple_silicon',age));
+  assert.equal(ref.retail?.referenceVnd,28_990_000*retainedFraction('apple_silicon',age));
   for (const state of [null,lookup([],{status:'failed',errors:['blocked']}),lookup([],{checkedAt:new Date(now-PRICE_CACHE_MS).toISOString()})]) {
     const fallback = result(state).reference!;
     assert.equal(fallback.retail?.indicative,true); assert.equal(fallback.kind,'historical_depreciation');
@@ -82,7 +82,8 @@ test('foreign prices cannot displace Vietnamese history unless complete Vietnam 
 test('incomplete purchase costs and unavailable currency conversions cannot create a firm retail verdict', () => {
   const cost = result(lookup([offer({totalCostKnown:false})]),[]).reference!;
   assert.equal(cost.retail?.indicative,true);
-  assert.equal(result(lookup([offer({currency:'XYZ'})])).reference?.retail?.indicative,true);
+  assert.equal(result(lookup([offer({currency:'XYZ'})])).reference?.kind,'historical_depreciation');
+  assert.equal(result(lookup([offer({currency:'XYZ'})]),[]).reference,null);
 });
 test('unknown release year, age above eight years, unknown class and conflicting original prices remain indicative', () => {
   const base = LAPTOP_LAUNCH_PRICES[0];
@@ -148,14 +149,44 @@ test('new MacBook launch prices apply only to documented configurations and curr
   assert.equal(result(lookup(),LAPTOP_LAUNCH_PRICES,{...m2.profile,ramGb:16}).reference,null);
   const ref = result(lookup([offer({profile:base.profile,amount:20_000_000})]),LAPTOP_LAUNCH_PRICES,base.profile).reference!;
   assert.equal(ref.kind,'retail_new'); assert.equal(ref.retail?.retention,null);
-  assert.equal(ref.retail?.referenceUsd,20_000_000/fx.rates.VND);
+  assert.equal(ref.retail?.referenceVnd,20_000_000);
 });
-test('retail and FX expire at seven days, with no new USD verdict from stale FX', () => {
+test('native VND retail and historical valuations do not depend on exchange rates', () => {
   assert.equal(freshDate(at,now+PRICE_CACHE_MS-1),true); assert.equal(freshDate(at,now+PRICE_CACHE_MS),false);
   assert.equal(validFx(fx,now+PRICE_CACHE_MS-1),true); assert.equal(validFx(fx,now+PRICE_CACHE_MS),false);
-  assert.equal(laptopReference(profile,lookup(),LAPTOP_LAUNCH_PRICES,{...fx,fetchedAt:new Date(now-PRICE_CACHE_MS).toISOString()},now).reference,null);
+  const noRates = laptopReference(profile,lookup([offer()]),LAPTOP_LAUNCH_PRICES,null,now).reference!;
+  assert.equal(noRates.retail?.referenceVnd,20_000_000); assert.equal(noRates.retail?.fx,null);
+  assert.equal(noRates.retail?.fxStale,false); assert.equal(noRates.retail?.indicative,false);
+  const staleAt = new Date(now-PRICE_CACHE_MS).toISOString(), stale = {...fx,fetchedAt:staleAt,date:staleAt.slice(0,10)};
+  assert.deepEqual(laptopReference(profile,lookup(),LAPTOP_LAUNCH_PRICES,stale,now),
+    laptopReference(profile,lookup(),LAPTOP_LAUNCH_PRICES,null,now));
 });
-test('USD formatting uses the same snapshot while retaining exact native values for evidence', () => {
-  setExchangeRates(fx); assert.equal(money(25_818),'$1.00'); assert.equal(originalMoney(25_818),'₫25,818');
-  setExchangeRates(null); assert.equal(money(25_818),'—');
+test('foreign retail is converted to VND at current rates and expired rates retain only indicative estimates', () => {
+  const foreign = offer({currency:'EUR',amount:900,market:'FR'}), current = lookup([foreign]);
+  const ref = laptopReference(profile,current,[],fx,now).reference!;
+  assert.equal(ref.average,25_818_000); assert.equal(ref.retail?.sources[0].amount,900);
+  assert.equal(ref.retail?.sources[0].currency,'EUR'); assert.equal(ref.retail?.sources[0].amountVnd,ref.average);
+  assert.equal(ref.retail?.fx?.date,fx.date); assert.equal(ref.retail?.fxStale,false);
+  const a = assessment(profile,{kind:'laptop'}), item = raw('foreign',20_000_000,{category:'laptop',
+    title:'MacBook Air 13 M1 2020 8CPU 7GPU 8GB/256GB',description:'Used, working. RAM 8GB. SSD 256GB.'});
+  assert.equal(valueListing(item,a,ref,DEFAULT_SETTINGS,EMPTY_STATE).opportunity,true);
+  const staleAt = new Date(now-PRICE_CACHE_MS).toISOString(), stale = {...fx,fetchedAt:staleAt,date:staleAt.slice(0,10)};
+  const staleRef = laptopReference(profile,current,[],stale,now).reference!;
+  assert.equal(staleRef.average,ref.average); assert.equal(staleRef.retail?.fxStale,true);
+  const estimate = valueListing(item,a,staleRef,DEFAULT_SETTINGS,EMPTY_STATE);
+  assert.equal(estimate.status,'indicative'); assert.equal(estimate.evidenceIssue,'exchange_rate');
+  assert.equal(estimate.opportunity,false); assert.equal(estimate.componentOpportunity,false); assert.equal(estimate.resaleOpportunity,false);
+  const updated = laptopReference(profile,current,[],{...fx,rates:{...fx.rates,VND:30_000}},now).reference!;
+  assert.equal(updated.average,30_000_000); assert.equal(updated.retail?.fxStale,false);
+  const unavailable = laptopReference(profile,current,[],null,now);
+  assert.equal(unavailable.reference,null);
+  assert.equal(valueListing(item,a,null,DEFAULT_SETTINGS,EMPTY_STATE,unavailable.reason).evidenceIssue,'exchange_rate');
+  const native = laptopReference(profile,lookup([foreign,offer()]),[],stale,now).reference!;
+  assert.equal(native.retail?.fx,null); assert.equal(native.retail?.indicative,false);
+});
+test('VND formatting works without FX and AI spending retains its native USD format', () => {
+  assert.equal(money(25_818),'₫25,818'); assert.equal(originalMoney(25_818),'₫25,818');
+  assert.equal(money(null),'—'); assert.equal(money(NaN),'—'); assert.equal(money(0),'₫0');
+  assert.equal(compactMoney(20_000_000),'₫20M'); assert.equal(originalMoney(900,'EUR'),'€900.00');
+  assert.equal(usd(.25),'$0.25');
 });

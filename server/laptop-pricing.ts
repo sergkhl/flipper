@@ -1,8 +1,8 @@
 import type { HardwareProfile, ReferencePrice } from '../shared/types.ts';
-import { freshDate, toUsd, validFx, type FxSnapshot, type LaptopClass, type LaptopPriceEvidence, type RetailLookup, type RetailPrice } from '../shared/retail.ts';
+import { freshDate, toVnd, validFx, type FxSnapshot, type LaptopClass, type LaptopPriceEvidence, type RetailLookup, type RetailPrice } from '../shared/retail.ts';
 import { cpuModels, normalize } from './hardware.ts';
 
-export const LAPTOP_PRICE_POLICY = 1;
+export const LAPTOP_PRICE_POLICY = 2;
 export const RETENTION: Record<LaptopClass, readonly number[]> = {
   apple_silicon: [.85, .70, .40, .25], business: [.80, .60, .30, .15], consumer: [.75, .55, .25, .10],
 };
@@ -93,35 +93,43 @@ function launchEvidence(offer: RetailPrice): boolean {
 
 export function laptopReference(profile: HardwareProfile, lookup: RetailLookup | null, history: RetailPrice[],
   fx: FxSnapshot | null, now = Date.now()): { reference: ReferencePrice | null; reason: string } {
-  if (!validFx(fx, now)) return { reference: null, reason: 'A current USD exchange-rate snapshot is unavailable. Refresh before comparing prices.' };
-  const matches = (offers: RetailPrice[]) => offers.filter(o => o.amount > 0 && Number.isFinite(o.amount)
-    && toUsd(o.amount, o.currency, fx) != null && retailMatch(profile, o.profile) !== 'different');
+  const matches = (offers: RetailPrice[]) => offers.flatMap(o => {
+    const amountVnd = toVnd(o.amount,o.currency,fx,now);
+    return o.amount > 0 && amountVnd !== null && retailMatch(profile,o.profile) !== 'different' ? [{...o,amountVnd}] : [];
+  });
   const current = matches(lookup?.offers ?? []).filter(o => o.basis === 'current_new' && o.available && freshDate(o.observedAt, now));
   const credible = current.filter(o => o.totalCostKnown && o.shipsToVietnam && retailMatch(profile,o.profile) === 'exact');
+  const freshCredible = credible.filter(o => o.currency === 'VND' || validFx(fx,now));
   const historical = matches(history).filter(launchEvidence);
   const domesticHistory = historical.filter(o => o.market === 'VN');
   const reasons: string[] = [];
-  let sources: RetailPrice[], basis: LaptopPriceEvidence['basis'];
-  if (credible.length) { sources = credible; basis = 'current_new'; }
+  let sources: ReturnType<typeof matches>, basis: LaptopPriceEvidence['basis'];
+  if (freshCredible.length) { sources = freshCredible; basis = 'current_new'; }
   else if (domesticHistory.length || historical.length) {
     sources = domesticHistory.length ? domesticHistory : historical; basis = 'historical_depreciation';
     // A direct launch retail observation takes precedence over launch MSRP.
     if (sources.some(o => o.basis === 'launch_retail')) sources = sources.filter(o => o.basis === 'launch_retail');
     const exact = sources.filter(o => retailMatch(profile,o.profile) === 'exact');
     if (exact.length) sources = exact;
-  } else if (current.length) { sources = current; basis = 'current_new'; }
-  else return { reference: null, reason: lookup?.status === 'failed'
+  } else if (current.length) { sources = credible.length ? credible : current; basis = 'current_new'; }
+  else return { reference: null, reason: [...(lookup?.offers ?? []),...history].some(o => o.currency !== 'VND'
+    && o.amount > 0 && Number.isFinite(o.amount) && retailMatch(profile,o.profile) !== 'different' && toVnd(o.amount,o.currency,fx,now) === null)
+    ? 'No usable exchange rate is available for the matching foreign price evidence.' : lookup?.status === 'failed'
     ? `Current retail lookup failed; no supported historical price is available. ${lookup.errors.join('; ')}`
     : 'No verified new or original launch price is available for this configuration. Analyze to check retail sources.' };
-  sources = [...sources].sort((a,b) => toUsd(a.amount,a.currency,fx)! - toUsd(b.amount,b.currency,fx)!);
+  if (!validFx(fx,now) && sources.some(o => o.currency === 'VND')) sources = sources.filter(o => o.currency === 'VND');
+  sources = [...sources].sort((a,b) => a.amountVnd - b.amountVnd);
+  const conversion = sources.some(o => o.currency !== 'VND') ? fx : null;
+  const fxStale = conversion !== null && !validFx(conversion,now);
+  if (fxStale) reasons.push('The exchange rate is stale; this foreign-price estimate cannot support a deal verdict.');
   const exact = sources.every(o => retailMatch(profile,o.profile) === 'exact');
   if (!exact) reasons.push('The exact configuration is incomplete; displayed prices cover possible variants.');
   const kind = laptopClass(profile);
   let ageRange: [number,number] | null = null, retention: number | null = null;
-  let values: number[] = [], originalUsd: number | null = null;
+  let values: number[] = [], originalVnd: number | null = null;
   if (basis === 'current_new') {
     if (!credible.length) reasons.push('Vietnam delivery or the complete unconditional purchase cost is unverified.');
-    values = sources.map(o => toUsd(o.amount,o.currency,fx)!);
+    values = sources.map(o => o.amountVnd);
   } else {
     if (!lookup || lookup.status !== 'complete' || !freshDate(lookup.checkedAt, now)
       || lookup.offers.some(o => !freshDate(o.observedAt,now))) {
@@ -129,8 +137,6 @@ export function laptopReference(profile: HardwareProfile, lookup: RetailLookup |
       if (lookup?.errors.length) reasons.push(...lookup.errors);
     }
     if (current.some(o => o.market === 'VN' && retailMatch(profile,o.profile) !== 'exact')) reasons.push('A possible new offer has incomplete configuration evidence.');
-    if (lookup?.offers.some(o => o.available && o.totalCostKnown && o.shipsToVietnam && freshDate(o.observedAt,now)
-      && retailMatch(profile,o.profile) !== 'different' && toUsd(o.amount,o.currency,fx) === null)) reasons.push('A matching new offer uses an unavailable exchange rate.');
     if (sources.some(o => o.market !== 'VN')) reasons.push('Foreign launch price converted at current FX; Vietnam import costs are unknown.');
     if (!kind) reasons.push('Laptop depreciation class is uncertain.');
     const ages = sources.map(o => releaseRange(o,profile,now));
@@ -139,22 +145,22 @@ export function laptopReference(profile: HardwareProfile, lookup: RetailLookup |
     if (ageRange[0] !== ageRange[1] || sources.some(o => !o.releaseDate)) reasons.push('Release timing and the first-90-day launch window are uncertain; the estimate shows an age range.');
     if (ageRange[1] > 8) reasons.push('Models over eight years old receive indicative estimates only.');
     const classes = kind ? [kind] : Object.keys(RETENTION) as LaptopClass[];
-    values = sources.flatMap((o,i) => classes.flatMap(c => ages[i]!.map(age => toUsd(o.amount,o.currency,fx)! * retainedFraction(c,age))));
-    originalUsd = toUsd(sources[0].amount,sources[0].currency,fx)!;
-    if (new Set(sources.map(o => toUsd(o.amount,o.currency,fx))).size > 1) reasons.push('Original prices differ across sources or possible configurations; the estimate is a range.');
+    values = sources.flatMap((o,i) => classes.flatMap(c => ages[i]!.map(age => o.amountVnd * retainedFraction(c,age))));
+    originalVnd = sources[0].amountVnd;
+    if (new Set(sources.map(o => o.amountVnd)).size > 1) reasons.push('Original prices differ across sources or possible configurations; the estimate is a range.');
     if (kind && ageRange[0] === ageRange[1]) retention = retainedFraction(kind,ageRange[0]);
   }
-  const range: [number,number] = [Math.min(...values),Math.max(...values)], referenceUsd = range[0];
+  const range: [number,number] = [Math.min(...values),Math.max(...values)], referenceVnd = range[0];
   const evidence: LaptopPriceEvidence = { policyVersion: LAPTOP_PRICE_POLICY, basis, indicative: reasons.length > 0,
     reasons, sources, checkedAt: lookup?.checkedAt ?? null, lookupStatus: lookup?.status ?? 'not_checked', laptopClass: kind,
-    ageYears: ageRange && ageRange[0] === ageRange[1] ? ageRange[0] : null, ageRange, retention, originalUsd,
-    referenceUsd, rangeUsd: range, fx };
+    ageYears: ageRange && ageRange[0] === ageRange[1] ? ageRange[0] : null, ageRange, retention, originalVnd,
+    referenceVnd, rangeVnd: range, fx:conversion, fxStale };
   const label = basis === 'current_new' ? 'Lowest verified new retail price' : 'Depreciation estimate';
   const methodology = basis === 'current_new'
     ? 'Lowest matching factory-new cash price, including known tax and mandatory delivery to Vietnam. The used asking price is compared directly with this current new price.'
     : 'Original launch retail price (or explicitly labeled launch MSRP) × retained value for age since model release. Policy estimates, not observed resale prices.';
   return { reference: { kind: basis === 'current_new' ? 'retail_new' : 'historical_depreciation', retail: evidence,
-    label, average: referenceUsd*fx.rates.VND, min: range[0]*fx.rates.VND, max: range[1]*fx.rates.VND,
+    label, average: referenceVnd, min: range[0], max: range[1],
     sampleCount: new Set(sources.map(source => source.url)).size, offers: [], components: [], rejected: [], observedAt: sources[0].observedAt, methodology },
     reason: reasons.length ? reasons.join(' ') : `${label}. Working-used condition assumed; battery health and wear are unverified.` };
 }

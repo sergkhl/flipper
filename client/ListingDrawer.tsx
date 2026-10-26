@@ -23,7 +23,7 @@ import type {
 } from "../shared/types";
 import Drawer from "./Drawer";
 import { message } from "./api";
-import { date, money, originalMoney, safeSourceUrl, usd } from "./format";
+import { date, money, originalMoney, safeSourceUrl } from "./format";
 import { evidenceLabel } from "./valuation";
 import { hasDedicatedVram, hasMemoryTypeEstimates, hasTechApiMemoryData, memoryDescription, type MemoryTypeMetadata } from "./memory";
 
@@ -161,7 +161,6 @@ export default function ListingDrawer({
             <div>
               <span>Seller asking price</span>
               <strong>{money(item.price)}</strong>
-              <small>Original: {originalMoney(item.price)}</small>
               <small>Observed {date(item.observedAt)}</small>
             </div>
             <div
@@ -486,7 +485,7 @@ function RetailReference({reference}: {reference: ReferencePrice}) {
       <p>{reference.methodology}</p>
     </div></div>
     {historical && <p className="section-caption">
-      Original new price: {evidence.originalUsd === null ? 'Unknown' : usd(evidence.originalUsd)}.
+      Original new price: {money(evidence.originalVnd)}.
       {' '}Model age: {evidence.ageYears !== null ? `${evidence.ageYears.toFixed(1)} years`
         : evidence.ageRange ? `${evidence.ageRange[0].toFixed(1)}–${evidence.ageRange[1].toFixed(1)} years` : 'Unknown'}.
       {' '}Depreciation class: {evidence.laptopClass === 'apple_silicon' ? 'Apple Silicon' : evidence.laptopClass === 'business'
@@ -496,12 +495,12 @@ function RetailReference({reference}: {reference: ReferencePrice}) {
     <p className="section-caption">Working-used condition assumed. Confirm battery health and wear with the seller.</p>
     {evidence.reasons.length > 0 && <div className="notice warning-notice"><Info size={17}/><p>{evidence.reasons.join(' ')}</p></div>}
     <p className="section-caption">Current retail lookup: {evidence.lookupStatus === 'complete' ? 'complete within configured sources' : evidence.lookupStatus === 'failed' ? 'incomplete / failed' : 'not checked'} · {date(evidence.checkedAt)}.</p>
-    <p className="section-caption">USD exchange rates dated {evidence.fx.date}, fetched {date(evidence.fx.fetchedAt)}. Retail prices and exchange rates are cached for 7 days. Historical prices use this same current rate.</p>
+    {evidence.fx && <p className="section-caption">Foreign prices converted to VND using {evidence.fxStale ? 'a stale exchange rate' : 'exchange rates'} dated {evidence.fx.date}, fetched {date(evidence.fx.fetchedAt)}. Rates are cached for 7 days.{evidence.fxStale && ' Stale-rate estimates cannot support deal badges.'}</p>}
     {evidence.sources.map((source,index) => <div className="component-reference" key={source.id}>
       <div className="component-heading"><div>
         <span className="eyebrow">{source.basis === 'launch_msrp' ? 'Launch MSRP' : source.basis === 'launch_retail' ? 'Original launch retail' : index === 0 ? 'Lowest verified new offer' : 'New retail offer'}</span>
         <h4><a href={safeSourceUrl(source.url)} target="_blank" rel="noreferrer">{source.title} <ExternalLink size={13}/></a></h4>
-      </div><strong>{usd(source.amount/evidence.fx.rates[source.currency])}</strong></div>
+      </div><strong>{money(source.amountVnd)}</strong></div>
       <p className="section-caption">{source.source} · original {originalMoney(source.amount,source.currency)} · {source.market} · price date {source.priceDate ?? 'unknown'} · checked {date(source.observedAt)}</p>
       {source.basis === 'current_new' && <p className="section-caption">{source.available ? 'In stock when checked' : 'Availability unverified'} · {source.totalCostKnown && source.shipsToVietnam ? 'Includes tax and mandatory Vietnam delivery' : 'Complete Vietnam purchase cost is unverified'}</p>}
       {source.releaseSourceUrl && <p className="section-caption"><a href={safeSourceUrl(source.releaseSourceUrl)} target="_blank" rel="noreferrer">Model release evidence</a>: {source.releaseDate ?? source.releaseYear ?? 'unknown'}</p>}

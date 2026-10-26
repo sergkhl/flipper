@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { LaptopPriceBook } from '../server/laptop-price-book.ts';
-import { ExchangeRates, type RuntimeCache } from '../server/price-cache.ts';
+import type { RuntimeCache } from '../server/price-cache.ts';
+import type { FxSnapshot } from '../shared/retail.ts';
 import { retailMatch } from '../server/laptop-pricing.ts';
 import { LAPTOP_LAUNCH_PRICES } from '../server/laptop-launch-prices.ts';
 import type { HardwareProfile } from '../shared/types.ts';
@@ -31,10 +32,9 @@ if (values.live) {
   // HTTP bound. Count requests without changing the fetch/redirect behavior.
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (...args) => { networkRequests++; return originalFetch(...args); };
-  const liveBook = new LaptopPriceBook(cache), liveRates = new ExchangeRates(cache);
+  const liveBook = new LaptopPriceBook(cache);
   const signal = AbortSignal.timeout(5 * 60_000);
   try {
-    await liveRates.warm(signal);
     for (const item of cases) {
       await liveBook.warm(item.profile, signal);
       console.error(`${item.id}: ${liveBook.lookup(item.profile)?.status ?? 'not_checked'}`);
@@ -45,19 +45,18 @@ if (values.live) {
   }
 }
 const evaluationTime = values.at ? Date.parse(values.at) : Date.now(), now = () => evaluationTime;
-const book = new LaptopPriceBook(cache, undefined, now), rates = new ExchangeRates(cache, fetch, now);
-const evaluatedAt = new Date(evaluationTime).toISOString(), fx = rates.snapshot();
-if (!fx) throw new Error('No fresh FX snapshot at the evaluation date; coverage cannot be measured.');
+const book = new LaptopPriceBook(cache, undefined, now);
+const evaluatedAt = new Date(evaluationTime).toISOString(), fx = cache.runtimeValue<FxSnapshot>('prices:fx:v1');
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const rows = cases.map(item => {
-  const lookup = book.lookup(item.profile), { reference, reason } = book.reference(item.profile, fx), evidence = reference?.retail;
+  const lookup = book.lookup(item.profile), { reference, reason } = book.reference(item.profile), evidence = reference?.retail;
   const outcome = !evidence ? 'unpriced' : `${evidence.basis === 'current_new' ? 'current' : 'historical'}_${evidence.indicative ? 'indicative' : 'firm'}`;
   return { id: item.id, profile: item.profile, eligibility: item.eligibility,
     lookupStatus: lookup?.status ?? 'not_checked', checkedAt: lookup?.checkedAt ?? null,
     lookupErrors: lookup?.errors ?? [], checkedUrls: lookup?.checkedUrls ?? [],
     outcome, exactReference: !!evidence && evidence.sources.every(source => retailMatch(item.profile, source.profile) === 'exact'),
     firmReference: !!evidence && !evidence.indicative, reason,
-    rangeUsd: evidence?.rangeUsd ?? null,
+    rangeVnd: evidence?.rangeVnd ?? null, fxStale: evidence?.fxStale ?? false,
     sources: evidence?.sources.map(({ id, url, basis, amount, currency }) => ({ id, url, basis, amount, currency })) ?? [],
   };
 });

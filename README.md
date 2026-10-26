@@ -151,11 +151,14 @@ integration is configured. Operate one server process per data directory.
   range without a badge. The reviewed history includes M1/M2/M4 MacBooks and
   Surface Pro 7/7+ configurations; unsupported laptops remain unpriced. See the
   [source evidence](docs/data-sources.md) and [coverage benchmark](docs/laptop-price-benchmark.md).
-  [ADR 0012](docs/adr/0012-laptop-retail-pricing-and-usd.md) defines the curves.
-- **USD display:** all price displays and maximum-price inputs use one current
-  FX snapshot. Original currency values remain visible in details and unchanged
-  in storage. Current retail prices and FX cache for **seven days** across
-  restarts. Failed lookups do not prove absence; expired FX pauses fresh verdicts.
+  [ADR 0012](docs/adr/0012-laptop-retail-pricing.md) defines the curves.
+- **VND pricing:** listing prices, comparisons and maximum-price inputs use VND.
+  Only foreign reference prices need conversion, with original amounts, currencies
+  and rate provenance retained in details. Current retail prices and exchange rates
+  cache for **seven days** across restarts. Failed rate refreshes retain foreign
+  estimates marked stale, without deal badges; native VND verdicts remain usable.
+  AI costs and allowances retain their native USD billing unit. Failed retail
+  lookups never prove absence.
 
 - **GPUs and desktops:** the reference is the arithmetic mean of matching nationwide **used asking
   prices**, after filtering incompatible models/configurations, unsafe or

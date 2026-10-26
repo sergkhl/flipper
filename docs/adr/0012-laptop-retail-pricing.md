@@ -1,9 +1,9 @@
-# Laptop retail references and USD prices
+# Laptop retail references and VND prices
 
-Accepted 25 October 2026 following the pricing interview. Supersedes the laptop
-used-peer comparison and configurable discount gate in ADRs 0002 and 0003.
-Desktop and GPU reference construction, physical-condition exclusions and the
-24-hour freshness requirement for Chợ Tốt observations remain in force.
+Laptop references use current new retail or original launch evidence. Desktop
+and GPU references use nationwide used offers. Physical-condition exclusions
+and the 24-hour freshness requirement for Chợ Tốt observations remain in force.
+The laptop reference policy is version 2.
 
 Compare a used laptop with the lowest verified, currently purchasable factory-new
 cash price for its exact configuration. Include known VAT and mandatory delivery
@@ -25,7 +25,7 @@ their own. Reviewed coverage and source evidence are maintained in
 [data sources](../data-sources.md) and the configuration price book;
 unsupported configurations remain unpriced, rather than receiving invented prices.
 
-Historical retained-value policy v1 uses linear interpolation between these
+The historical retained-value policy uses linear interpolation between these
 anchors, measured from the model's first release/order date, not the owner's
 purchase date. These are explicit product assumptions, not fitted resale data.
 
@@ -42,11 +42,13 @@ working used device, retain damage/repair exclusions, and display unknown batter
 health/wear without invented monetary adjustments. Changes to assumptions require
 a policy version change and source-backed additions to the reviewed price book.
 
-All displayed monetary comparisons and budget inputs use USD and one current FX
-snapshot. Keep native marketplace amounts unchanged in storage and the API, with
-explicit `priceCurrency=USD` for USD filters and currency-tagged saved searches.
-Historical prices use current FX too; do not reconstruct historical exchange rates
-or invent import markups. Label the rate date and retain original currency values.
+All listing prices, monetary comparisons and price-budget inputs use VND in the
+UI, storage and API. Saved budgets need no currency tag. AI usage costs retain
+their native USD billing unit. Native VND prices and verdicts never depend on FX.
+Only foreign retail and launch evidence is converted into VND, using current
+exchange rates. Recalculate those references when rates change; do not freeze
+conversion at import or reconstruct historical rates. Retain original amounts,
+currencies, conversion dates and sources, without inventing import markups.
 
 Cache current retail prices, catalog/search discovery and exchange-rate snapshots
 for **seven days**, including across restarts. A cached product keeps its original
@@ -54,8 +56,11 @@ observation date: a later lookup does not extend its lifetime. Cache confirmed
 absence for seven days; back off failures for 15 minutes. A failed, truncated or
 unreadable lookup never establishes absence. A still-fresh verified new offer can
 remain usable despite another source failing; otherwise historical evidence stays
-indicative until a successful check. Expired FX cannot support fresh USD verdicts.
-FX source dates must be recent when fetched; the seven-day cache runs from fetch.
+indicative until a successful check. FX source dates must be recent when fetched;
+the seven-day cache runs from fetch. When a rate expires and refresh fails, keep
+foreign-price estimates using the last verified snapshot, visibly mark the rate
+stale, and withhold deal badges. Without any usable rate, foreign evidence remains
+unpriced. Native VND evidence remains usable independently of conversion failures.
 
 For laptops, GPUs, desktops and partial component baselines, any asking price
 **strictly below** the supported reference qualifies. Equality does not, and
@@ -70,5 +75,4 @@ host-checked redirects and three shared HTTP slots. No paid API or marketplace
 proxy is used for prices or FX. Collection/analysis warms the cache; ordinary
 reads stay offline. Bounded background maintenance warms up to twelve retained
 configurations and participates in deployment exclusion and shutdown draining.
-The release uses additive `source_runtime` entries, with no destructive data
-migration. Earlier images do not implement this valuation policy.
+Retail and exchange-rate caches persist in `source_runtime` across restarts.

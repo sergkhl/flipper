@@ -125,7 +125,9 @@ npm run benchmark:laptop-prices -- \
 ```
 
 Without `--live`, the runner never warms sources or modifies the cache. It rejects
-a missing cache or stale FX instead of reporting misleading zero coverage.
+a missing cache. Results use VND `rangeVnd` values and report `fxStale` for foreign
+estimates. Missing FX leaves only foreign references unpriced; stale verified
+rates retain indicative estimates. Native VND coverage is independent of FX.
 Compare `caseDigest` and `inputDigest` before attributing changes to the price
 book or matcher; `historyDigest` identifies the reviewed price data separately.
 The checked-in fixture can be used against future services without exposing ads.

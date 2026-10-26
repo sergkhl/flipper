@@ -49,6 +49,27 @@ async function httpFixture(t: TestContext) {
   return { ...f, base: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
 }
 
+test('public and administrator price filters use VND and reject unsupported currencies; saved budgets round-trip without tags', async (t) => {
+  const {base,store,candidate} = await httpFixture(t);
+  for (const prefix of ['/api','/admin/api']) {
+    const listings = (query: string) => fetch(`${base}${prefix}/listings?category=gpu&${query}`,{headers:adminHeaders});
+    const included = await (await listings(`maxPrice=${candidate.price}`)).json() as ListingsResponse;
+    assert.equal(included.total,1); assert.equal('fx' in included,false);
+    assert.equal((await (await listings(`maxPrice=${candidate.price-1}`)).json() as ListingsResponse).total,0);
+    for (const currency of ['USD','EUR','']) assert.equal((await listings(`maxPrice=800&priceCurrency=${currency}`)).status,400);
+    for (const path of ['/bootstrap','/listings/'+candidate.id]) {
+      assert.equal('fx' in await (await fetch(base+prefix+path,{headers:adminHeaders})).json(),false);
+    }
+  }
+  const search = {name:'VND budget',category:'gpu',query:'',maxPrice:4_000_001};
+  const save = (data: object) => fetch(base+'/admin/api/searches',{method:'POST',
+    headers:{...adminHeaders,'content-type':'application/json'},body:JSON.stringify(data)});
+  assert.equal((await save({...search,priceCurrency:'USD'})).status,400);
+  const saved = await save(search); assert.equal(saved.status,201);
+  assert.equal(store.searches()[0]?.maxPrice,search.maxPrice);
+  assert.equal('priceCurrency' in store.searches()[0]!,false);
+});
+
 test('hosted startup fails closed for incomplete, weak, or ambiguous access configuration', () => {
   assert.equal(validateServerAccess({}).hosted, false);
   assert.deepEqual(serverOptions({ FLIPPER_PUBLIC_ORIGIN: origin, FLIPPER_ADMIN_TOKEN: token, FLIPPER_REVISION: 'abc123' }),

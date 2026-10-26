@@ -1,4 +1,4 @@
-import { freshDate, validFx, type FxSnapshot } from '../shared/retail.ts';
+import { freshDate, usableFx, validFx, type FxSnapshot } from '../shared/retail.ts';
 
 export interface RuntimeCache {
   runtimeValue<T>(key: string): T | null;
@@ -49,10 +49,10 @@ export class ExchangeRates {
   constructor(private cache: RuntimeCache, private fetcher: PriceFetch = fetch, private now = () => Date.now()) {}
   snapshot(): FxSnapshot | null {
     const value = this.cache.runtimeValue<FxSnapshot>('prices:fx:v1');
-    return validFx(value, this.now()) ? value : null;
+    return usableFx(value, this.now()) ? value : null;
   }
   async warm(signal?: AbortSignal): Promise<void> {
-    if (this.snapshot() || this.now() < this.retryAfter) return;
+    if (validFx(this.snapshot(), this.now()) || this.now() < this.retryAfter) return;
     if (!this.pending) this.pending = this.refresh(signal).finally(() => { this.pending = null; });
     await this.pending; signal?.throwIfAborted();
   }

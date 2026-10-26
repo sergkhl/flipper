@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { HardwareProfile } from '../shared/types.ts';
-import { freshDate, type FxSnapshot, type RetailLookup, type RetailPrice } from '../shared/retail.ts';
-import type { RuntimeCache } from './price-cache.ts';
+import { freshDate, type RetailLookup, type RetailPrice } from '../shared/retail.ts';
+import { ExchangeRates, type RuntimeCache } from './price-cache.ts';
 import { PublicRetailSources } from './retail-sources.ts';
-import { laptopReference } from './laptop-pricing.ts';
+import { laptopReference, retailMatch } from './laptop-pricing.ts';
 import { LAPTOP_LAUNCH_PRICES } from './laptop-launch-prices.ts';
 
 export interface RetailSource { lookup(profile: HardwareProfile, signal?: AbortSignal): Promise<RetailLookup>; }
@@ -13,16 +13,24 @@ const cacheKey = (p: HardwareProfile) => `prices:laptop:v1:${createHash('sha256'
 export class LaptopPriceBook {
   private pending = new Map<string,Promise<void>>();
   private source: RetailSource;
+  private rates: ExchangeRates;
   constructor(private cache: RuntimeCache, source?: RetailSource, private now = () => Date.now(),
-    private history: RetailPrice[] = LAPTOP_LAUNCH_PRICES) { this.source = source ?? new PublicRetailSources(cache,fetch,now); }
+    private history: RetailPrice[] = LAPTOP_LAUNCH_PRICES, rates?: ExchangeRates) {
+    this.source = source ?? new PublicRetailSources(cache,fetch,now);
+    this.rates = rates ?? new ExchangeRates(cache,fetch,now);
+  }
   lookup(profile: HardwareProfile): RetailLookup | null { return this.cache.runtimeValue<RetailLookup>(cacheKey(profile)); }
-  reference(profile: HardwareProfile, fx: FxSnapshot | null) { return laptopReference(profile,this.lookup(profile),this.history,fx,this.now()); }
+  reference(profile: HardwareProfile) { return laptopReference(profile,this.lookup(profile),this.history,this.rates.snapshot(),this.now()); }
   async warm(profile: HardwareProfile, signal?: AbortSignal): Promise<void> {
     const key = cacheKey(profile), saved = this.lookup(profile);
-    if (saved && freshDate(saved.checkedAt,this.now(),saved.status === 'complete' ? undefined : 15*60_000)
-      && (saved.status === 'failed' || saved.offers.every(o => freshDate(o.observedAt,this.now())))) return;
-    if (!this.pending.has(key)) this.pending.set(key,this.refresh(key,profile,saved,signal).finally(() => this.pending.delete(key)));
-    await this.pending.get(key); signal?.throwIfAborted();
+    if (!(saved && freshDate(saved.checkedAt,this.now(),saved.status === 'complete' ? undefined : 15*60_000)
+      && (saved.status === 'failed' || saved.offers.every(o => freshDate(o.observedAt,this.now()))))) {
+      if (!this.pending.has(key)) this.pending.set(key,this.refresh(key,profile,saved,signal).finally(() => this.pending.delete(key)));
+      await this.pending.get(key);
+    }
+    signal?.throwIfAborted();
+    if ([...(this.lookup(profile)?.offers ?? []),...this.history].some(offer =>
+      offer.currency !== 'VND' && retailMatch(profile,offer.profile) !== 'different')) await this.rates.warm(signal);
   }
   private async refresh(key: string, profile: HardwareProfile, saved: RetailLookup | null, signal?: AbortSignal) {
     let result: RetailLookup;
