@@ -2085,6 +2085,18 @@ strong {
 .disclosure[open] summary svg {
   transform: rotate(180deg);
 }
+.alternative-reference summary > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.alternative-reference summary strong {
+  color: #4f5b3f;
+}
+.alternative-reference > :not(summary) {
+  margin-left: 12px;
+  margin-right: 12px;
+}
 .quote-list {
   padding: 5px 13px 12px;
 }

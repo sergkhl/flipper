@@ -3,9 +3,11 @@ import type { AIStatus, AdminBootstrapResponse, AppSettings, Assessment, Categor
 import { DECIDER_MODEL, DEFAULT_SETTINGS, MIMO_MODEL } from './config.ts';
 import { ChototClient } from './chotot.ts';
 import { enrichComputerAssessment, expandPricedConfigurations } from './computer.ts';
-import { assessWithRules, cpuModels, gpuModels, listingText, normalize, profileKey, sourceUnavailable } from './hardware.ts';
+import { assessWithRules, cpuModels, gpuModels, listingText, normalize, profileKey, retailLaptopModel, sourceUnavailable } from './hardware.ts';
 import { BudgetExceededError, cachedAIAssessment, LiteLLMClient, RefreshBudget, type AIOutputCache, type CachedExtraction, type Decisions } from './litellm.ts';
-import { adjustmentRequirements, buildReference, filterComparableOffers, type AssessedListing, valueListing } from './pricing.ts';
+import { adjustmentRequirements, buildPartsReference, buildReference, filterComparableOffers, type AssessedListing, valueListing } from './pricing.ts';
+import { laptopCpu, laptopPartsKey } from './laptop-parts.ts';
+import { isMacBookListing } from './macbook.ts';
 import { EMPTY_STATE, Store, assessmentHash, type StoredListing } from './store.ts';
 import type { LaptopSpecRequest, MemoryPartRequest, MemoryTypeLookup } from './techapi.ts';
 import { laptopSpecRequest } from './laptop-specs.ts';
@@ -199,9 +201,12 @@ export class FlipperService {
   }
   private preparedView(listing: StoredListing, readOnly: boolean, settings: AppSettings): ListingView {
     const state = readOnly ? { ...EMPTY_STATE } : listing.state;
-    const retail = listing.assessment.kind === 'laptop' ? this.prices?.reference(listing.assessment.profile) : null;
-    const valuation = valueListing(listing.raw, listing.assessment, listing.assessment.kind === 'laptop' ? retail?.reference ?? null : listing.reference,
-      settings, state, retail?.reason ?? listing.reason);
+    const laptop = listing.assessment.kind === 'laptop', mac = laptop && isMacBookListing(listing.raw);
+    const retail = laptop ? this.prices?.reference(this.retailProfile(listing.raw, listing.assessment)) ?? { reference: null, reason: 'Retail price sources are not configured' } : null;
+    // MacBooks use retail and launch prices; other laptops use their stored same-parts average with retail beside it.
+    const valuation = !laptop ? valueListing(listing.raw, listing.assessment, listing.reference, settings, state, listing.reason)
+      : mac ? valueListing(listing.raw, listing.assessment, retail!.reference, settings, state, retail!.reason)
+      : valueListing(listing.raw, listing.assessment, listing.reference, settings, state, listing.reason, retail!);
     if (!readOnly) return { ...listing.raw, assessment: listing.assessment, state, valuation };
     return { ...listing.raw,
       attributes: Object.fromEntries(Object.entries(listing.raw.attributes).filter(([key]) => !key.startsWith('_'))),
@@ -284,8 +289,8 @@ export class FlipperService {
       try {
         const profiles = new Map<string,HardwareProfile>();
         for (const row of this.store.marketListings('laptop')) {
-          const a = this.prepared(row).assessment;
-          if (a.eligibility !== 'excluded' && a.profile.model) profiles.set(JSON.stringify(a.profile),a.profile);
+          const a = this.prepared(row).assessment, profile = this.retailProfile(row.raw, a);
+          if (a.eligibility !== 'excluded' && profile.model) profiles.set(JSON.stringify(profile),profile);
         }
         const selected = [...profiles.values()].sort((a,b) =>
           (this.prices!.lookup(a)?.checkedAt ?? '').localeCompare(this.prices!.lookup(b)?.checkedAt ?? '')).slice(0,12);
@@ -521,6 +526,17 @@ export class FlipperService {
       aiIssue: this.budgetLimited ? 'AI allowance exhausted; conservative parsing continued' : this.aiError,
       settings, progress: context.progress, retryId: context.retryId }, this.now());
   }
+  /** Eligible listings, and laptops whose retail identity or same-parts key can still give an indicative reference. */
+  private comparable(raw: RawListing, assessment: Assessment): boolean {
+    if (assessment.eligibility === 'eligible') return true;
+    return assessment.kind === 'laptop' && assessment.eligibility !== 'excluded'
+      && (!!this.retailProfile(raw, assessment).model || !!laptopPartsKey(raw, assessment).key);
+  }
+  /** Extraction is skipped once rules state a laptop's parts, so retail matching reads an unextracted model from the title. */
+  private retailProfile(raw: RawListing, assessment: Assessment): HardwareProfile {
+    const p = assessment.profile;
+    return p.model || isMacBookListing(raw) ? p : { ...p, model: retailLaptopModel(raw.title) };
+  }
   private assessed(raw: RawListing, context: JobContext, rulesOnly = false): Promise<Assessment> {
     this.checkWork(context);
     // A rules-only result for one comparison pool must not stand in for an AI assessment another pool needs.
@@ -657,16 +673,20 @@ export class FlipperService {
       for (const listing of [...gathered.keys()].map(id => this.prepared(this.store.getListing(id)!)).sort((a,b) =>
         memoryPriority(job.category, a.assessment.profile, context.memory) - memoryPriority(job.category, b.assessment.profile, context.memory)
         || a.raw.price-b.raw.price)) {
-        if ((listing.assessment.eligibility !== 'eligible' && !(listing.assessment.kind === 'laptop' && listing.assessment.eligibility !== 'excluded' && listing.assessment.profile.model)) || sourceUnavailable(listing.raw)) continue;
-        const c = listing.assessment.computer;
-        const key = `${profileKey(listing.assessment.profile, listing.assessment.kind)}:${JSON.stringify([c?.formFactor, c?.cpuCount, c?.ramEcc, c?.ramReplaceable, c?.storageReplaceable])}`;
+        if (!this.comparable(listing.raw, listing.assessment) || sourceUnavailable(listing.raw)) continue;
+        const c = listing.assessment.computer, parts = laptopPartsKey(listing.raw, listing.assessment).key;
+        // Non-MacBook laptops share one nationwide comparison search per processor model.
+        const key = parts ? `laptop-cpu:${parts.cpu}`
+          : `${profileKey(listing.assessment.profile, listing.assessment.kind)}:${JSON.stringify([c?.formFactor, c?.cpuCount, c?.ramEcc, c?.ramReplaceable, c?.storageReplaceable])}`;
         if (progress.comparedIds.includes(listing.raw.id)) completedConfigurations.add(key);
         else groups.set(key, [...(groups.get(key) ?? []), listing]);
       }
       let count = completedConfigurations.size;
       const selected: Array<[string, StoredListing[]]> = [];
-      for (const [key, members] of groups) {
-        if (count >= AUTO_COHORTS && !completedConfigurations.has(key)) {
+      // Laptops search every processor in the collection, most-listed first; the request allowance bounds the work.
+      const cohorts = job.category === 'laptop' ? [...groups].sort((a, b) => b[1].length - a[1].length) : [...groups];
+      for (const [key, members] of cohorts) {
+        if (job.category !== 'laptop' && count >= AUTO_COHORTS && !completedConfigurations.has(key)) {
           for (const listing of members) if (!listing.reference) this.store.setReference(listing.raw.id, null,
             'Not benchmarked in this bounded refresh. Open the listing and choose Analyze to retrieve its focused nationwide comparisons.');
           continue;
@@ -703,8 +723,9 @@ export class FlipperService {
       const updated = this.store.putListing(raw, assessment, listing.local); context.job.assessed = 1;
       context.progress.raws = [raw]; context.progress.assessedIds = [raw.id];
       this.checkpoint(context);
-      if (assessment.eligibility === 'eligible' || assessment.kind === 'laptop' && assessment.eligibility !== 'excluded' && assessment.profile.model) {
-        context.job.status = 'comparing'; context.job.message = assessment.kind === 'laptop' ? 'Checking new retail and original launch prices' : 'Retrieving focused nationwide price evidence';
+      if (this.comparable(raw, assessment)) {
+        context.job.status = 'comparing'; context.job.message = assessment.kind === 'laptop' && isMacBookListing(raw) ? 'Checking new retail and original launch prices'
+          : assessment.kind === 'laptop' ? 'Retrieving same-parts laptops across Vietnam and new retail prices' : 'Retrieving focused nationwide price evidence';
         this.checkpoint(context);
         await this.benchmark([updated], context);
       }
@@ -764,18 +785,20 @@ export class FlipperService {
     }
     return kind === 'laptop' ? p.model ?? '' : p.cpu ?? '';
   }
+  /** `support` counts the independent sellers a pool gives; by default, those comparable with the target. */
   private async collectPool(kind: HardwareKind, query: string, target: StoredListing, context: JobContext,
-    reserveBaseSeller = false): Promise<AssessedListing[]> {
+    reserveBaseSeller = false, support?: (pool: AssessedListing[]) => number): Promise<AssessedListing[]> {
     const limit = Math.min(context.settings.benchmarkLimit, NATIONAL_OFFER_LIMIT);
     const key = `incremental-v3:${kind}:${normalize(query)}:${limit}`;
-    return context.poolLocks.run(key, () => this.collectPoolLocked(kind, query, target, context, reserveBaseSeller, key, limit), context.abort.signal);
+    return context.poolLocks.run(key, () => this.collectPoolLocked(kind, query, target, context, reserveBaseSeller, key, limit, support), context.abort.signal);
   }
   private async collectPoolLocked(kind: HardwareKind, query: string, target: StoredListing, context: JobContext,
-    reserveBaseSeller: boolean, key: string, limit: number): Promise<AssessedListing[]> {
+    reserveBaseSeller: boolean, key: string, limit: number, support?: (pool: AssessedListing[]) => number): Promise<AssessedListing[]> {
     const required = Math.max(5, context.settings.minComparables) + (reserveBaseSeller ? 1 : 0);
-    const enough = (pool: AssessedListing[]) => kind === 'desktop' || kind === 'laptop'
-      ? (buildReference(target.raw, target.assessment, pool, context.settings).reference?.sampleCount ?? 0) >= required
-      : filterComparableOffers(target.raw, target.assessment.profile, kind, pool).accepted.length >= required;
+    const supportOf = support ?? ((pool: AssessedListing[]) => kind === 'desktop' || kind === 'laptop'
+      ? buildReference(target.raw, target.assessment, pool, context.settings).reference?.sampleCount ?? 0
+      : filterComparableOffers(target.raw, target.assessment.profile, kind, pool).accepted.length);
+    const enough = (pool: AssessedListing[]) => supportOf(pool) >= required;
     const collected = context.pools.get(key); if (collected && enough(collected)) return collected;
     const cached = this.store.getPool(key, POOL_AGE_MS);
     const progress = this.store.poolProgress(key, POOL_AGE_MS)
@@ -805,15 +828,15 @@ export class FlipperService {
       const candidates = pool.map((item, index) => ({ ...item, index })).filter(({ raw, assessment: a }) => {
         const p = target.assessment.profile;
         const plausible = kind === 'gpu' ? !a.profile.gpu || a.profile.gpu === p.gpu
-          : kind === 'cpu' || kind === 'desktop' ? !a.profile.cpu || a.profile.cpu === p.cpu : a.eligibility !== 'excluded';
+          : kind === 'cpu' || kind === 'desktop' ? !a.profile.cpu || a.profile.cpu === p.cpu
+          : kind === 'laptop' ? !laptopCpu(a.profile.cpu) || laptopCpu(a.profile.cpu) === p.cpu : a.eligibility !== 'excluded';
+        // Laptop RAM differences are priced, so laptop details are worth reading whatever their RAM.
         return raw.id !== target.raw.id && !progress.detailedIds.includes(raw.id) && !sourceUnavailable(raw)
           && plausible && a.eligibility !== 'excluded' && (!raw.description.trim() || a.eligibility === 'review')
-          && (!computer || !canCollect || rank(a.profile.ramGb) < 2);
+          && (!computer || kind === 'laptop' || !canCollect || rank(a.profile.ramGb) < 2);
       }).sort((a, b) => computer ? rank(a.assessment.profile.ramGb) - rank(b.assessment.profile.ramGb) : 0);
       if (candidates.length && progress.detailedIds.length < 20) {
-        const supported = kind === 'desktop' || kind === 'laptop'
-          ? buildReference(target.raw, target.assessment, pool, context.settings).reference?.sampleCount ?? 0
-          : filterComparableOffers(target.raw, target.assessment.profile, kind, pool).accepted.length;
+        const supported = supportOf(pool);
         const size = Math.min(context.settings.marketplaceWorkers, 20 - progress.detailedIds.length, Math.max(1, required - supported));
         await this.parallel(context, candidates.slice(0, size), async next => {
           const updated = await this.enriched(next.raw, context);
@@ -849,21 +872,35 @@ export class FlipperService {
         const assessment = await this.assessed(raw, context);
         member = this.store.putListing(raw, assessment, member.local);
       }
-      if ((member.assessment.eligibility === 'eligible' || member.assessment.kind === 'laptop' && member.assessment.eligibility !== 'excluded' && member.assessment.profile.model)
-        && !sourceUnavailable(member.raw) && member.raw.description.trim()) verified.push(member);
+      if (this.comparable(member.raw, member.assessment) && !sourceUnavailable(member.raw) && member.raw.description.trim()) verified.push(member);
     });
     const order = new Map(members.map((member, index) => [member.raw.id, index]));
     verified.sort((a,b) => order.get(a.raw.id)! - order.get(b.raw.id)!);
     if (!verified.length) return;
     const target = verified[0]!, kind = target.assessment.kind;
     if (kind === 'laptop') {
+      // Retail and launch prices are read when a listing is shown; the stored reference is the same-parts average.
       for (const member of verified) {
-        await this.prices?.warm(member.assessment.profile,context.abort.signal);
-        const result = this.prices?.reference(member.assessment.profile);
+        await this.prices?.warm(this.retailProfile(member.raw, member.assessment),context.abort.signal);
         this.store.setAssessment(member.raw.id,member.assessment);
-        this.store.setReference(member.raw.id,result?.reference ?? null,result?.reason ?? 'Retail price sources are not configured');
-        context.job.benchmarked++;
       }
+      const byCpu = new Map<string, StoredListing[]>();
+      for (const member of verified) {
+        const parts = laptopPartsKey(member.raw, member.assessment);
+        if (parts.key) byCpu.set(parts.key.cpu, [...(byCpu.get(parts.key.cpu) ?? []), member]);
+        else this.store.setReference(member.raw.id, null, parts.reason);
+      }
+      for (const [cpu, group] of byCpu) {
+        const searchTarget = { ...group[0]!, assessment: { ...group[0]!.assessment, profile: { ...group[0]!.assessment.profile, cpu } } };
+        // One nationwide search per processor serves every listing with it; it stops early only when each has a verdict-sized sample.
+        const peers = await this.collectPool('laptop', cpu, searchTarget, context, false, pool => Math.min(...group.map(member =>
+          buildPartsReference(member.raw, member.assessment, pool, context.settings).reference?.sampleCount ?? 0)));
+        for (const member of group) {
+          const result = buildPartsReference(member.raw, member.assessment, peers, context.settings);
+          this.store.setReference(member.raw.id, result.reference, result.reason);
+        }
+      }
+      context.job.benchmarked += verified.length;
       return;
     }
     const query = this.searchQuery(kind, target);

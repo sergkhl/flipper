@@ -6,8 +6,8 @@ asking-price references. Resale controls and assumptions are removed from the
 interface as of 14 October 2026; legacy stored fields remain compatible. Phones
 are excluded from the current version. Chợ Tốt is the initial
 marketplace and Da Nang is the initial buying location. Reference comparisons
-use new retail/original launch evidence for laptops and nationwide used offers
-for GPUs and desktops. Prices and price budgets use VND. Convert only foreign
+use nationwide used offers for GPUs, desktops and same-parts laptops, and new
+retail/original launch evidence for MacBooks. Prices and price budgets use VND. Convert only foreign
 reference evidence using current rates cached for seven days; failed rate
 refreshes retain stale indicative estimates without deal badges. Native VND
 valuations do not depend on exchange rates. AI costs remain in USD.
@@ -113,10 +113,12 @@ use the saved default subject to category ceilings of USD 0.50 for laptops and
 USD 0.25 for desktops and GPUs, within USD 1.00 a day. See ADRs 0009–0011.
 
 **Reference price**:
-A supported comparison value. Laptops use the lowest verified exact-configuration
+A supported comparison value. MacBooks use the lowest verified exact-configuration
 VAT-inclusive new retail price from a reviewed Vietnamese shop, or original launch price
 times historical retained value after a successful current-price absence check.
 See ADR 0012 for the source hierarchy, seven-day caches and depreciation policy.
+Other laptops use a same-parts laptop comparison, capped by a lower firm current
+new retail price (ADR 0013).
 GPUs and desktops use a filtered arithmetic mean of matching nationwide used
 Chợ Tốt asking-price offers from independent sellers. At least three offers provide an indicative
 average and range; at least five (or a higher configured minimum) are required
@@ -130,9 +132,9 @@ computer evidence can be supplemented by component-adjusted comparisons.
 **Component-adjusted comparison**:
 A comparable computer's asking price minus supported averages for removed parts
 plus supported averages for added parts. Desktops retain CPU/platform and can
-adjust GPU, RAM and SSD. Laptop used-peer adjustment was superseded by retail
-pricing on 25 October 2026. Explicit GPU absence differs from unknown GPU
+adjust GPU, RAM and SSD. Explicit GPU absence differs from unknown GPU
 inclusion, and separately priced configurations retain their own included parts.
+Laptops use a same-parts laptop comparison instead.
 Each PC advertisement and seller contributes once. The weakest PC/part pool
 sets the evidence count; combinations do not manufacture independent samples.
 Missing base details are displayed and reduce confidence without blocking
@@ -151,6 +153,16 @@ each group. Directly stated memory types and uniquely manufacturer-supported
 derived types are displayed separately from capacity, with provenance for the
 latter. Ambiguous variants and contradictory evidence remain unresolved.
 
+**Same-parts laptop comparison**:
+The filtered average of nationwide used laptops, of any brand, with the same
+processor model and graphics as a laptop other than a MacBook. Brand, model line,
+year and screen are ignored. Laptops with the same RAM and storage are used when
+enough independent sellers offer them; otherwise other laptops are adjusted at
+reviewed per-GB RAM and SSD values, within 25% of their asking price. The processor
+model, RAM and storage capacity are required; a missing model name, assumed
+integrated graphics, RAM generation or SSD interface lowers confidence only. Three
+sellers give an indicative average and five a verdict. See ADR 0013.
+
 **Discount threshold**:
 Any strictly positive reduction from the supported reference. For reference R
 and asking price P, the discount is `(R − P) / R`; a good price requires `P < R`.
@@ -158,8 +170,9 @@ Equality does not qualify. The legacy setting is fixed at zero.
 
 **Below-market find**:
 A current, eligible listing whose asking price is strictly below its whole-item
-reference. Laptop badges explicitly name new retail or depreciation estimates.
-GPU/desktop complete or component-adjusted references require at least five
+reference. Laptop badges name the deciding evidence: same-parts laptops, new
+retail or, for MacBooks, depreciation estimates.
+Same-parts laptop, GPU and desktop complete or component-adjusted references require at least five
 independent sellers (or the higher configured minimum) and observations within
 24 hours. Three or four offers provide separately browsable
 indicative comparisons without a scored discount or deal badge.
@@ -190,7 +203,7 @@ references and opportunity calculations use retrieved offers and deterministic
 arithmetic. A manual refresh has a configurable initial AI budget (USD 0.50 by
 default). Every ad is classified; extraction is skipped for MacBooks, for ads the
 Decider does not accept as working used items at a cash price, and for laptops
-whose quoted text already states their configuration. Paid model outputs are
+whose quoted text already states the processor, graphics, RAM and storage. Paid model outputs are
 cached under their own prompt versions and reused when result handling changes.
 Quoted deterministic facts can fill AI omissions; conflicting claims remain
 in review. An unambiguous single-model GPU offer at a whole-item price may be

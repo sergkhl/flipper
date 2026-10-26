@@ -16,6 +16,7 @@
     "test:release": "node --test deploy/release.test.mjs",
     "memory:sync": "tsx scripts/sync-memory-cache.ts",
     "benchmark:laptop-prices": "tsx scripts/benchmark-laptop-prices.ts",
+    "laptop:part-values": "tsx scripts/laptop-part-values.ts",
     "check": "tsc --noEmit",
     "deploy": "node deploy/deploy.mjs"
   },

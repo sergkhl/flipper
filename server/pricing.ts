@@ -3,6 +3,8 @@ import { normalize, sourceUnavailable } from './hardware.ts';
 import { enrichComputerAssessment, expandPricedConfigurations } from './computer.ts';
 import { freshDate, validFx } from '../shared/retail.ts';
 import { LAPTOP_PRICE_POLICY } from './laptop-pricing.ts';
+import { LAPTOP_PARTS_POLICY, MAX_ADJUSTMENT_SHARE, PART_VALUES, laptopPartsKey, type LaptopPartsKey } from './laptop-parts.ts';
+import { isMacBookListing } from './macbook.ts';
 
 export interface AssessedListing { raw: RawListing; assessment: Assessment; }
 export interface ReferenceResult { reference: ReferencePrice | null; reason: string; matched: number; }
@@ -110,7 +112,7 @@ export function configurationsMatch(kind: HardwareKind, a: HardwareProfile, b: H
   return true;
 }
 
-function offerFrom(raw: RawListing, reason?: string, price = raw.price): ComparableOffer {
+export function offerFrom(raw: RawListing, reason?: string, price = raw.price): ComparableOffer {
   return { id: raw.id, sellerId: raw.sellerId, title: raw.title, price, url: raw.url,
     region: raw.region, observedAt: raw.observedAt, ...(reason ? { rejectedReason: reason } : {}) };
 }
@@ -128,7 +130,7 @@ function hasUnpricedDesktopExtras(raw: RawListing): boolean {
   });
 }
 
-interface SellerIdentities { key(raw: RawListing): string; }
+export interface SellerIdentities { key(raw: RawListing): string; }
 function contactKeys(raw: RawListing): string[] {
   const keys: string[] = [];
   const lines = raw.description.split('\n').map(normalize);
@@ -161,7 +163,7 @@ function contactKeys(raw: RawListing): string[] {
 }
 
 /** Merge only explicit source identity evidence, including links across several accounts. */
-function sellerIdentities(raws: RawListing[], now: number): SellerIdentities {
+export function sellerIdentities(raws: RawListing[], now: number): SellerIdentities {
   const parents = new Map<string, string>();
   const find = (key: string): string => {
     const parent = parents.get(key);
@@ -264,11 +266,11 @@ export function adjustmentRequirements(candidateRaw: RawListing, candidateAssess
     && configurationsMatch(term.kind, term.profile, other.profile)) === index).map(({ kind, profile }) => ({ kind, profile }));
 }
 
-function freshnessInvalid(observedAt: string, now: number): boolean {
+export function freshnessInvalid(observedAt: string, now: number): boolean {
   const observed = Date.parse(observedAt);
   return !Number.isFinite(observed) || now - observed > REFERENCE_MAX_AGE_MS;
 }
-function removeOutliers<T extends ComparableOffer>(selected: T[], rejected: ComparableOffer[]): T[] {
+export function removeOutliers<T extends ComparableOffer>(selected: T[], rejected: ComparableOffer[]): T[] {
   if (selected.length < 4) return selected;
   const values = selected.map((offer) => offer.price).sort((a, b) => a - b);
   const median = quantile(values, 0.5), q1 = quantile(values, 0.25), q3 = quantile(values, 0.75);
@@ -325,7 +327,7 @@ function labelFor(kind: HardwareKind, profile: HardwareProfile): string {
   return [profile.model, profile.cpu, profile.gpu ?? (noDiscreteGpu(profile) ? 'No discrete GPU' : null), `${profile.ramGb ?? '?'} GB RAM`, `${profile.storageGb ?? '?'} GB ${profile.storageType ?? 'storage'}`].filter(Boolean).join(' · ');
 }
 
-function latestComputerOptions(peers: AssessedListing[]): AssessedListing[][] {
+export function latestComputerOptions(peers: AssessedListing[]): AssessedListing[][] {
   const ids = new Set<string>();
   return [...peers].sort((a, b) => b.raw.observedAt.localeCompare(a.raw.observedAt)).flatMap(({ raw, assessment }) => {
     if (ids.has(raw.id)) return [];
@@ -475,8 +477,131 @@ export function buildReference(candidate: RawListing, assessment: Assessment, pe
     reason: `Only ${full.accepted.length} independent matching offers after filtering; at least ${INDICATIVE_MIN_COMPARABLES} are required for an indicative average and ${required} for scoring. ${adjustedRejected.some((offer) => offer.rejectedReason?.includes('independent offers support')) ? 'Component-adjusted comparisons lack independently supported prices for one or more required parts. ' : ''}Expand or refine the nationwide search.` };
 }
 
+const vnd = (value: number) => `${Math.round(value).toLocaleString('en-US')} ₫`;
+const partsMethodology = `Arithmetic mean of nationwide used Chợ Tốt laptops with the same processor model and graphics (for a discrete GPU, the same model and video memory), from any brand or model line. One offer per seller after linking accounts by an exact shared contact phone or numbered shop address; this listing, its seller and linked accounts are excluded. Laptops with the same RAM and storage are used when enough independent sellers offer them. Otherwise other laptops are adjusted at reviewed used-part rates (${vnd(PART_VALUES.ramPerGb)} per GB of RAM, ${vnd(PART_VALUES.nvmePerGb)} per GB of NVMe or unstated SSD, ${vnd(PART_VALUES.sataPerGb)} per GB of SATA SSD, reviewed ${PART_VALUES.reviewedAt}), whether or not the parts are soldered, and only when the total adjustment is at most ${MAX_ADJUSTMENT_SHARE * 100}% of that laptop's asking price. Outliers use Q1/Q3 ± 1.5 × max(IQR, 10% of median). Observations expire after 24 hours. Asking prices are not completed-sale prices.`;
+
+/** Approximate used value of the RAM/SSD difference between a comparison laptop and the candidate. */
+function partAdjustments(target: LaptopPartsKey, peer: LaptopPartsKey): ComponentAdjustment[] {
+  const terms: ComponentAdjustment[] = [];
+  const add = (kind: 'ram' | 'ssd', gb: number, rate: number, unit: string) => terms.push({ kind, operation: gb > 0 ? 'add' : 'remove',
+    label: `${Math.abs(gb)} GB ${unit}`, quantity: 1, average: Math.abs(gb) * rate, total: Math.abs(gb) * rate, offers: [], ratePerGb: rate });
+  if (target.ramGb !== peer.ramGb) add('ram', target.ramGb - peer.ramGb, PART_VALUES.ramPerGb, 'RAM');
+  if (target.storageGb !== peer.storageGb && !target.hdd) add('ssd', target.storageGb - peer.storageGb,
+    target.sata ? PART_VALUES.sataPerGb : PART_VALUES.nvmePerGb, target.sata ? 'SATA SSD' : 'SSD');
+  return terms;
+}
+
+/** Same-parts used laptops of any brand, normalized to the candidate's RAM and storage. */
+export function buildPartsReference(candidate: RawListing, input: Assessment, peers: AssessedListing[], settings: AppSettings,
+  now = Date.now()): ReferenceResult {
+  const assessment = enrichComputerAssessment(candidate, input);
+  const { key, reason } = laptopPartsKey(candidate, assessment);
+  if (!key) return { reference: null, matched: 0, reason };
+  if (!candidate.sellerId) return { reference:null, matched:0, reason:'The candidate seller cannot be identified, so own-seller offers cannot be excluded from a reference' };
+  const identities = sellerIdentities([candidate, ...peers.map((peer) => peer.raw)], now);
+  const required = Math.max(5, settings.minComparables), rejected: ComparableOffer[] = [];
+  type Entry = { offer: AdjustedComparable; exact: boolean; shift: number };
+  const better = (a: Entry, b: Entry) => a.exact !== b.exact ? a.exact : Math.abs(a.shift) < Math.abs(b.shift);
+  const bySeller = new Map<string, Entry>();
+  for (const variants of latestComputerOptions(peers)) {
+    const raw = variants[0]!.raw, seller = identities.key(raw);
+    let why = '';
+    if (raw.id === candidate.id || seller === identities.key(candidate)) why = 'Candidate or the same seller/account-linked business';
+    else if (!raw.sellerId) why = 'Independent seller cannot be verified';
+    else if (raw.condition !== 'used') why = 'Condition or eligibility is not verified';
+    else if (sourceUnavailable(raw)) why = 'The source marks this listing as unavailable';
+    else if (!raw.description.trim() || raw.attributes._detailError) why = 'Complete seller description could not be verified';
+    else if (freshnessInvalid(raw.observedAt, now)) why = 'Observation older than 24 hours or invalid timestamp';
+    if (why) { rejected.push(offerFrom(raw, why)); continue; }
+    let best: Entry | null = null;
+    for (const { raw: priced, assessment: peer } of variants) {
+      if (peer.eligibility !== 'eligible' || peer.conflicts.length || peer.risks.length) { why = 'Condition or eligibility is not verified'; continue; }
+      if (!Number.isFinite(priced.price) || priced.price <= 0 || peer.profile.priceBasis !== 'item') { why = 'Unusable cash price'; continue; }
+      const parts = laptopPartsKey(priced, peer).key;
+      if (!parts) { why = 'Different or incompletely stated parts'; continue; }
+      if (parts.cpu !== key.cpu) { why = 'Different processor model'; continue; }
+      if (parts.gpu !== key.gpu) { why = 'Different graphics'; continue; }
+      if (parts.hdd !== key.hdd || key.hdd && parts.storageGb !== key.storageGb) { why = 'Different storage type'; continue; }
+      const adjustments = partAdjustments(key, parts);
+      const shift = adjustments.reduce((sum, term) => sum + (term.operation === 'add' ? term.total : -term.total), 0);
+      if (Math.abs(shift) > priced.price * MAX_ADJUSTMENT_SHARE) { why = `RAM/SSD adjustment would exceed ${MAX_ADJUSTMENT_SHARE * 100}% of this laptop's asking price`; continue; }
+      const entry: Entry = { exact: !adjustments.length, shift, offer: { ...offerFrom(priced, undefined, priced.price + shift), askingPrice: priced.price,
+        configurationLabel: `${parts.ramGb} GB RAM · ${parts.storageGb} GB ${parts.hdd ? 'HDD' : 'SSD'}`, adjustments,
+        missingDetails: peer.computer?.missing ?? [] } };
+      if (!best || better(entry, best)) best = entry;
+    }
+    if (!best) { rejected.push(offerFrom(raw, why || 'No supported comparable configuration')); continue; }
+    const previous = bySeller.get(seller);
+    // One comparison per seller; the closest configuration represents a seller with several laptops.
+    if (previous && !better(best, previous)) rejected.push({ ...best.offer, rejectedReason: 'Duplicate seller/account-linked business' });
+    else {
+      if (previous) rejected.push({ ...previous.offer, rejectedReason: 'Duplicate seller/account-linked business' });
+      bySeller.set(seller, best);
+    }
+  }
+  const entries = [...bySeller.values()], exact = entries.filter((entry) => entry.exact);
+  const chosen = exact.length >= required ? exact : entries;
+  if (chosen === exact) rejected.push(...entries.filter((entry) => !entry.exact).map((entry) => ({ ...entry.offer,
+    rejectedReason: `${exact.length} independent sellers already offer the same RAM and storage` })));
+  const accepted = removeOutliers(chosen.map((entry) => entry.offer), rejected);
+  if (accepted.length < INDICATIVE_MIN_COMPARABLES) return { reference: null, matched: accepted.length,
+    reason: `Only ${accepted.length} independent sellers offer laptops with the same processor and graphics within the adjustment limit; at least ${INDICATIVE_MIN_COMPARABLES} are required for an indicative average and ${required} for a verdict.` };
+  return { matched: accepted.length,
+    reference: { policyVersion: LAPTOP_PARTS_POLICY, kind: 'parts_market',
+      label: `${key.cpu} · ${key.gpuLabel} · ${key.ramGb} GB RAM · ${key.storageGb} GB ${key.hdd ? 'HDD' : 'SSD'}`,
+      average: average(accepted), min: Math.min(...accepted.map((offer) => offer.price)), max: Math.max(...accepted.map((offer) => offer.price)),
+      offers: accepted, adjustedOffers: accepted, rejected, components: [], sampleCount: accepted.length, baseSampleCount: accepted.length,
+      observedAt: new Date(now).toISOString(), missingDetails: assessment.computer?.missing ?? [], methodology: partsMethodology },
+    reason: `${accepted.length} independent sellers offer laptops with the same parts${accepted.length < required ? `; indicative only until ${required}` : ''}` };
+}
+
+/**
+ * Non-MacBook laptops: the same-parts used average decides, and a lower current new retail price caps it.
+ * Launch-price depreciation estimates are shown for context but never decide or cap a verdict.
+ */
+function laptopPartsValuation(raw: RawListing, assessment: Assessment, stored: ReferencePrice | null,
+  retail: { reference: ReferencePrice | null; reason: string }, settings: AppSettings, empty: Valuation, missing: string[]): Valuation {
+  const now = Date.now(), required = Math.max(5, settings.minComparables);
+  const parts = stored?.kind === 'parts_market' && stored.policyVersion === LAPTOP_PARTS_POLICY ? stored : null;
+  const retailReference = retail.reference?.retail?.policyVersion === LAPTOP_PRICE_POLICY ? retail.reference : null;
+  const newRetail = retailReference?.retail?.basis === 'current_new' ? retailReference : null;
+  const ready = assessment.eligibility === 'eligible' && !assessment.conflicts.length && Number.isFinite(raw.price) && raw.price > 0;
+  const described = !!raw.description.trim() && !raw.attributes._detailError, current = !freshnessInvalid(raw.observedAt, now);
+  const partsStale = !!parts?.offers.some((offer) => freshnessInvalid(offer.observedAt, now));
+  const partsFirm = !!parts && !partsStale && parts.sampleCount >= required;
+  const evidence = newRetail?.retail;
+  const retailFirm = !!evidence && !evidence.indicative && !(evidence.fx && (evidence.fxStale || !validFx(evidence.fx)))
+    && evidence.sources.every((source) => freshDate(source.observedAt));
+  const firm = [partsFirm ? parts : null, retailFirm ? newRetail : null].filter((item): item is ReferencePrice => item !== null)
+    .sort((a, b) => a.average - b.average);
+  const governing = firm[0] ?? parts ?? retailReference;
+  if (!governing) return stored?.kind === 'parts_market' ? { ...empty, evidenceIssue: 'outdated_policy',
+    reason: 'Hardware interpretation changed. Analyze this laptop to compare it with same-parts laptops again.' }
+    : stored ? { ...empty, reason: 'Analyze this laptop to compare it with used laptops that have the same parts.' } : empty;
+  const alternatives = [parts, retailReference].filter((item): item is ReferencePrice => !!item && item !== governing);
+  const discountPercent = Number.isFinite(raw.price) && raw.price > 0 ? (governing.average - raw.price) / governing.average * 100 : null;
+  const context = { reference: governing, discountPercent, ...(alternatives.length ? { alternatives } : {}) };
+  const indicative = (reason: string, evidenceIssue?: Valuation['evidenceIssue']): Valuation => ({ ...empty, ...context, status: 'indicative', reason, evidenceIssue });
+  if (!ready) return indicative([...assessment.conflicts, ...assessment.unknowns, ...assessment.risks].join(' ') || 'Configuration needs review', 'configuration');
+  if (!described) return indicative('Retrieve the full seller description before using a price verdict.', 'missing_description');
+  if (!current) return indicative('The asking price is older than 24 hours; refresh it before using a verdict.', 'stale_listing');
+  if (!firm.length) {
+    if (partsStale) return indicative('Same-parts evidence is older than 24 hours. Refresh before using this valuation.', 'stale_reference');
+    if (parts) return indicative(`Indicative average from ${parts.sampleCount} same-parts sellers; at least ${required} are required for a verdict.`, 'insufficient_offers');
+    return indicative('No same-parts used comparison is available yet. Retail and launch prices are shown for context only.', 'insufficient_offers');
+  }
+  if (raw.price < governing.average * .1) return indicative('Verify the full cash asking price; it is below 10% of the supported reference.', 'unverified_price');
+  const byParts = governing === parts;
+  const note = missing.length ? ` Missing details: ${missing.join(', ')}. Scoring is allowed with reduced confidence.` : '';
+  return { ...empty, ...context, status: 'valued', opportunity: raw.price < governing.average, evidenceIssue: undefined, maxBuyPrice: governing.average,
+    confidence: !byParts ? 'medium' : missing.length ? 'low' : governing.sampleCount >= 10 ? 'high' : 'medium',
+    reason: `${byParts ? `Compared with ${governing.sampleCount} independent sellers of laptops with the same parts`
+      : 'Compared with current new retail, which is lower than the same-parts used average'}. Working-used condition assumed; battery health and wear are unverified.${note}` };
+}
+
 export function valueListing(raw: RawListing, assessment: Assessment, reference: ReferencePrice | null, settings: AppSettings,
-  state: ListingState, reason = 'No nationwide comparison has been collected'): Valuation {
+  state: ListingState, reason = 'No nationwide comparison has been collected',
+  retail?: { reference: ReferencePrice | null; reason: string }): Valuation {
   assessment = enrichComputerAssessment(raw, assessment);
   const category: Category = ['laptop', 'desktop', 'gpu'].includes(raw.category) ? raw.category as Category : 'desktop';
   const costReserve = state.costReserve ?? settings.costReserves[category];
@@ -491,6 +616,7 @@ export function valueListing(raw: RawListing, assessment: Assessment, reference:
   if (sourceUnavailable(raw)) return { ...empty, status: 'needs_review', evidenceIssue: 'unavailable', reason: 'The original listing is no longer available; its last observed price is retained in history' };
   if (assessment.eligibility === 'excluded') return { ...empty, status: 'excluded', reason: assessment.risks.join('; ') || 'Excluded from working used items' };
   if (!raw.sellerId) return { ...empty, status:'needs_review', evidenceIssue:'configuration', reason:'Seller identity is missing; verify this listing before using a price verdict.' };
+  if (assessment.kind === 'laptop' && retail && !isMacBookListing(raw)) return laptopPartsValuation(raw, assessment, reference, retail, settings, empty, missing);
   if (assessment.kind === 'laptop') {
     const retail = reference?.retail;
     if (!retail || retail.policyVersion !== LAPTOP_PRICE_POLICY) return { ...empty,

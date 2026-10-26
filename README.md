@@ -3,9 +3,10 @@
 **Find used hardware with price evidence you can inspect.**
 
 Flipper turns used laptops, desktops and graphics-card listings into a searchable
-workspace for personal buying. It compares candidates in Da Nang with matching
-new laptop retail prices and nationwide used GPU/desktop asking prices, then shows
-the specifications, sources and uncertainty behind each reference. The application is
+workspace for personal buying. It compares candidates in Da Nang with nationwide
+used asking prices for same-parts laptops, GPUs and desktops, and MacBooks with new
+retail prices, then shows the specifications, sources and uncertainty behind each
+reference. The application is
 [MIT-licensed](LICENSE); phones are outside its current scope.
 
 - [Open the live app](https://flipper.globesoul.com/)
@@ -144,7 +145,18 @@ integration is configured. Operate one server process per data directory.
 
 ## How prices are compared
 
-- **Laptops:** compare with the lowest verified factory-new cash offer for the
+- **Laptops other than MacBooks:** compare with nationwide used laptops of any
+  brand with the same processor model and graphics (a discrete GPU's model and
+  video memory). Brand, model line, year and screen are ignored. Laptops with the
+  same RAM and storage are used when five independent sellers offer them; otherwise
+  others are adjusted at reviewed used-part values of VND 100,000 per GB of RAM and
+  VND 2,500 (NVMe or unstated) or VND 2,000 (SATA) per GB of SSD, at most 25% of
+  their price. Three sellers give an indicative average and five a verdict. A lower
+  firm new retail price (below) caps the comparison; launch-price depreciation is
+  shown for context only. Refreshes search every collected processor, most-listed
+  first, within the request allowance. See
+  [ADR 0013](docs/adr/0013-same-parts-laptop-comparisons.md).
+- **MacBooks:** compare with the lowest verified factory-new cash offer for the
   exact configuration at four reviewed Vietnamese shops (HACOM, An Phát, Phong Vũ
   and TNC). Their VAT-inclusive listed price is the purchase cost; delivery is not
   added. Pre-orders, display or activated units and "contact us" placeholders are
@@ -305,7 +317,7 @@ OpenRouter Decisions passthrough. Configure gateway URLs in `.env.example`.
 AI extracts source-supported claims; deterministic code calculates prices and
 discounts. Every ad is classified; extraction is skipped for MacBooks, for ads the
 classifier does not accept as working used items at a cash price, and for laptops
-whose quoted text already states their configuration. Paid model outputs are cached
+whose quoted text already states the processor, graphics, RAM and storage. Paid model outputs are cached
 under their own prompt versions, so result-handling changes do not repeat them.
 Route availability and model quality need their own verification.
 See [LLM settings](docs/llm-settings.md).

@@ -2,6 +2,7 @@ import type { Assessment, HardwareProfile, RawListing } from '../shared/types.ts
 import { assessWithRules, normalize } from './hardware.ts';
 import type { Decisions } from './litellm.ts';
 import { isMacBookListing } from './macbook.ts';
+import { laptopPartsKey } from './laptop-parts.ts';
 
 const priceConflict = 'A stated cash price in the description differs from the displayed asking price';
 const essential = new Set<keyof HardwareProfile>(['model', 'cpu', 'gpu', 'gpuClass', 'vramGb', 'ramGb', 'storageGb', 'storageType']);
@@ -60,11 +61,9 @@ export function reconcileAssessment(raw: RawListing, input: Assessment): Assessm
     conflicts: mergedConflicts, unknowns, risks, eligibility };
 }
 
-/** Laptop fields that current comparisons read. Retail matching needs the model; RAM/SSD types may stay generic. */
-function laptopKeyComplete(rules: Assessment): boolean {
-  const p = rules.profile;
-  return rules.eligibility !== 'excluded' && !rules.conflicts.length && !!p.model && !!p.cpu && !!p.ramGb && !!p.storageGb
-    && !!p.storageType && !!p.gpu && !!p.gpuClass && (p.gpuClass === 'integrated' || !!p.vramGb);
+/** Same-parts comparisons read the processor, graphics, RAM and storage; extraction adds nothing once rules hold them. */
+function laptopKeyComplete(raw: RawListing, rules: Assessment): boolean {
+  return rules.eligibility !== 'excluded' && !rules.conflicts.length && !!laptopPartsKey(raw, rules).key;
 }
 
 /**
@@ -78,7 +77,7 @@ export function extractionSkipReason(raw: RawListing, decisions: Decisions, rule
     || decisions.locked_or_parts.noul >= 0.8 || decisions.deposit_only.noul >= 0.8) {
     return 'classification did not accept it as a working used item at a cash price';
   }
-  if (decisions.listing_type.choice === 'laptop' && rules.kind === 'laptop' && laptopKeyComplete(rules)) {
+  if (decisions.listing_type.choice === 'laptop' && rules.kind === 'laptop' && laptopKeyComplete(raw, rules)) {
     return 'quoted seller text already states the laptop configuration';
   }
   return null;

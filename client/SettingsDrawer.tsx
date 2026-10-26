@@ -106,7 +106,7 @@ export default function SettingsDrawer({
           </div>
           <p className="section-caption">
             Any asking price strictly below its supported reference qualifies as a good price.
-            Laptop references use new retail or historical depreciation. GPUs and desktops use nationwide used offers.
+            Laptops other than MacBooks use same-parts used laptops, capped by a lower current new retail price. MacBooks use new retail or historical depreciation. GPUs and desktops use nationwide used offers.
           </p>
           <div className="settings-grid">
             <NumberField
@@ -351,8 +351,10 @@ export default function SettingsDrawer({
           <p className="section-caption">
             Each refresh scans recent Da Nang listings in the selected category
             or query. It enriches 10 initial local ads, verifies descriptions for priced candidates, and compares
-            up to 12 distinct configurations. Laptops use retail sources; GPUs and desktops use up to {draft.benchmarkLimit}{" "}
-            nationwide offers per query, stopping once enough independent matching offers support the comparison. Open any listing and choose “Refresh
+            up to 12 distinct GPU or desktop configurations. Laptops other than MacBooks are compared processor by
+            processor: every processor in the collection, most-listed first, within the request allowance. MacBooks use
+            retail sources. Each nationwide query reads up to {draft.benchmarkLimit}{" "}
+            offers, stopping once enough independent matching offers support the comparison. Open any listing and choose “Refresh
             this evidence” for a focused comparison. You can expand the local
             scan from the feed.
           </p>

@@ -4,6 +4,7 @@ import { enrichMemoryTypes } from './memory-types.ts';
 import type { MemoryTypeLookup } from './techapi.ts';
 import { isMacBookListing } from './macbook.ts';
 import { enrichLaptopSpecs } from './laptop-specs.ts';
+import { withPartsDetails } from './laptop-parts.ts';
 
 const unique = <T,>(items: T[]): T[] => [...new Set(items)];
 const noDiscreteGpu = /\b(?:(?:khong|ko|k|chua)\s+(?:(?:co|kem|gom|gan)\s+)?(?:card(?:\s+do hoa)?|vga|gpu)(?:\s+roi)?|(?:no|without|excluding)\s+(?:discrete\s+)?(?:gpu|graphics(?:\s+card)?|vga)|(?:onboard|integrated)\s+only|chi\s+(?:(?:dung|co|kem)\s+)?(?:card\s+)?onboard)\b/;
@@ -56,7 +57,8 @@ function computerDetails(lines: ReturnType<typeof sourceLines>, kind: Assessment
   else if (storageRemovable) record('storageReplaceable', true, storageRemovable.quote);
   const required: [keyof ComputerDetails, string][] = kind === 'desktop'
     ? [['formFactor', 'Desktop form factor'], ['cpuCount', 'Processor count'], ['motherboard', 'Motherboard'], ['psu', 'Power supply'], ['case', 'Case'], ['cooling', 'Cooling'], ['ramEcc', 'RAM ECC status']]
-    : [['ramReplaceable', 'RAM replaceability'], ['storageReplaceable', 'Storage replaceability']];
+    // Laptop comparisons price RAM/SSD differences whether or not the parts are replaceable.
+    : [];
   details.missing = required.filter(([field]) => details[field] === null).map(([, label]) => label);
   return details;
 }
@@ -149,12 +151,14 @@ export function enrichComputerAssessment(raw: RawListing, input: Assessment, cac
   const lines = sourceLines(raw);
   assessment.computer = computerDetails(lines, input.kind);
   const ramLabels = ['RAM generation', 'RAM speed', 'RAM stick layout', 'RAM form factor'];
+  // Laptop comparisons use RAM and SSD capacity; RAM layout, speed, form factor and replaceability do not change them.
+  const laptop = input.kind === 'laptop', replaceability = ['RAM replaceability', 'Storage replaceability'];
   assessment.computer.missing = unique([...assessment.computer.missing,
     ...(!assessment.profile.ramType ? [ramLabels[0]!] : []),
-    ...(!assessment.profile.ramSpeedMhz ? [ramLabels[1]!] : []),
-    ...(!assessment.profile.perUnitGb || !assessment.profile.quantity ? [ramLabels[2]!] : []),
-    ...(!assessment.profile.ramFormFactor ? [ramLabels[3]!] : []),
-    ...(input.computer?.missing ?? []).filter(note => !ramLabels.includes(note)),
+    ...(!laptop && !assessment.profile.ramSpeedMhz ? [ramLabels[1]!] : []),
+    ...(!laptop && (!assessment.profile.perUnitGb || !assessment.profile.quantity) ? [ramLabels[2]!] : []),
+    ...(!laptop && !assessment.profile.ramFormFactor ? [ramLabels[3]!] : []),
+    ...(input.computer?.missing ?? []).filter(note => !ramLabels.includes(note) && !(laptop && replaceability.includes(note))),
   ]);
   const optionalBaseUnknowns = assessment.unknowns.filter((note) => {
     const text = normalize(note).replace(/\b(?:cpu|processor)\s+(?=cooler|cooling)/g, '');
@@ -232,7 +236,7 @@ export function enrichComputerAssessment(raw: RawListing, input: Assessment, cac
     enriched.computer.missing = enriched.computer.missing.filter((note) => note !== 'RAM generation');
     if (!enriched.profile.ramType) enriched.computer.missing.unshift('RAM generation');
   }
-  return enrichLaptopSpecs(raw,enriched,cache);
+  return withPartsDetails(raw, enrichLaptopSpecs(raw,enriched,cache));
 }
 
 /** Expand verified asking-price alternatives without manufacturing independent sellers. */
