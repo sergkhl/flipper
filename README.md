@@ -16,10 +16,44 @@ reference. The application is
 The public app is a read-only market browser. Collection, optional AI calls,
 saved items and settings belong to the private administrator workspace.
 
-![Flipper's read-only market view with synthetic graphics-card listings, memory filters and asking-price comparisons](docs/images/flipper-market-demo.jpg)
+## See the workflow
 
-*The screenshot uses synthetic listings and illustrative prices in an isolated
-local instance. It contains no marketplace seller data or photographs.*
+These captures show the actual application UI and API with synthetic listings,
+comparisons, price histories and run records in an isolated in-memory instance.
+Prices, request counts and AI accounting are illustrative; no marketplace seller
+data or photographs are included. The captures demonstrate the interface, not
+live provider availability or production execution.
+
+![Flipper's public market browser with synthetic hardware listings, specification filters and asking-price references](docs/images/flipper-discover.png)
+
+**Find hardware that fits.** Model, memory, district and VND budget filters narrow
+the local market, while reference prices help identify candidates worth a closer
+look.
+
+![Flipper's price evidence drawer showing an illustrative asking-price comparison, independent comparable offers and confidence](docs/images/flipper-price-evidence.png)
+
+**Inspect the price comparison.** Open a listing to examine the supported
+reference, comparable asking prices and confidence behind its valuation. The
+evidence stays close to the buying decision.
+
+![Flipper's specification check with synthetic source-supported hardware details, evidence and unknowns](docs/images/flipper-specification-check.png)
+
+**Check what the source supports.** Specification evidence and explicit unknowns
+show which hardware details are established and what still needs checking with
+the seller.
+
+![Flipper's observed price history showing illustrative dated prices for a synthetic listing](docs/images/flipper-price-history.png)
+
+**See how an asking price changed.** Dated observations keep earlier advertised
+prices available alongside the current listing, giving a buyer context before
+contacting the seller.
+
+![Flipper's private Runs view with a completed synthetic resumed run, cumulative requests, AI allowance and expanded attempt history](docs/images/flipper-runs-recovery.png)
+
+**Inspect recovery and spending in the private workspace.** This completed,
+resumed run shows cumulative requests and AI accounting against the retained
+allowance. Expanded attempt history makes the illustrative interruption and
+recovery visible; Runs requires administrator access.
 
 ## What it does
 
