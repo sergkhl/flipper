@@ -72,7 +72,8 @@ unknown. Tablet prices exclude separately sold keyboards and pens.
 
 The [20-configuration benchmark](laptop-price-benchmark.md) records the 25 October
 coverage expansion and remaining gaps. Most used laptops are models no shop sells
-new any more, so current shops can only price recent models.
+new any more, so current shops can only price recent models; laptops other than
+MacBooks are therefore compared with same-parts used laptops (below).
 
 On 26 October 2026, 24 Vietnamese shops were probed from the hosting server. FPT
 Shop, Phúc Anh and Kim Long answer with bot challenges, and Thế Giới Di Động,
@@ -95,6 +96,24 @@ FX dependency. Foreign references are recalculated when rates refresh. Expired
 snapshots remain available for explicitly stale estimates without deal badges.
 The lowest **verified** price means the lowest eligible offer in checked sources,
 not a claim to exhaustive market coverage. See ADR 0012 for fallback/FX policy.
+
+## Same-parts laptop part values
+
+Same-parts comparisons (ADR 0013) read nationwide Chợ Tốt listings found by
+searching the processor model. RAM and SSD differences use per-GB values reviewed
+on 26 October 2026 from stored used asking prices:
+
+| Part | Value | Evidence |
+| --- | ---: | --- |
+| RAM, any generation | VND 100,000/GB | Median price difference per GB between independent sellers' laptops with the same processor and graphics that differ only in RAM. The design evaluation found VND 100,000 from 346 pairs in 35 groups (90% interval 62,000–131,000); the shipped parts definitions give VND 112,500 (interquartile range −75,000 to 285,000) from 615 pairs in 59 groups. DDR5 (7 pairs) and LPDDR (14 pairs) are too few to price separately. |
+| NVMe or unstated SSD | VND 2,500/GB | Theil–Sen slope of price against capacity over 161 seller medians from 138 used-SSD sellers, 128 GB to 1 TB: VND 2,461 (interquartile range 1,758–3,125). Laptop pairs that differ only in SSD give VND 2,048, with a far wider spread. |
+| SATA SSD | VND 2,000/GB | The same method over 96 used-SSD sellers: VND 1,953 (interquartile range 1,563–2,982). |
+
+These are asking prices, not completed sales, and laptop pairs mix brands within
+each processor and graphics group. `npm run laptop:part-values -- --data DIR`
+recalculates this evidence from a database directory (default `.data`), opening it
+read-only and contacting no service. The values in `server/laptop-parts.ts` and
+this table are updated by hand after review.
 
 Marketplace HTTPS routing loads bounded runtime plaintext proxy lists from
 [monosans](https://github.com/monosans/proxy-list) and

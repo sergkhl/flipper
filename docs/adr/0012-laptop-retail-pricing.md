@@ -1,9 +1,12 @@
 # Laptop retail references and VND prices
 
-Laptop references use current new retail or original launch evidence. Desktop
-and GPU references use nationwide used offers. Physical-condition exclusions
-and the 24-hour freshness requirement for Chợ Tốt observations remain in force.
-The laptop reference policy is version 2.
+MacBook references use current new retail or original launch evidence. Other
+laptops are compared with same-parts used laptops (ADR 0013): a firm current new
+retail price found as described here caps that comparison, and a launch-price
+depreciation estimate is shown for context only. Desktop and GPU references use
+nationwide used offers. Physical-condition exclusions and the 24-hour freshness
+requirement for Chợ Tốt observations remain in force. The laptop retail policy is
+version 2.
 
 Compare a used laptop with the lowest verified, currently purchasable factory-new
 cash price for its exact configuration. Current prices come from four reviewed
@@ -79,8 +82,9 @@ For laptops, GPUs, desktops and partial component baselines, any asking price
 rounding for display does not affect the comparison. The old `discountPercent`
 setting remains a zero-valued compatibility field; it cannot restore the 10% gate.
 Existing eligibility, freshness and suspicious-cash-price checks still apply.
-Laptop labels distinguish “Good price vs new retail” from “Good price vs
-depreciation estimate”. Partial component finds remain separate from whole PCs.
+Laptop labels name the governing evidence: “Good price vs same-parts laptops”,
+“Good price vs new retail” or, for MacBooks only, “Good price vs depreciation
+estimate”. Partial component finds remain separate from whole PCs.
 
 Free public sources are accessed directly with bounded response sizes, deadlines,
 host-checked redirects and three shared HTTP slots. No paid API or marketplace

@@ -665,7 +665,7 @@ export default function App() {
               label="Price references"
               value={stats?.benchmarked ?? 0}
               icon={<ShieldCheck size={17} />}
-              note={category === 'laptop' ? 'New retail, then launch-price depreciation' : `3+ offers indicative · ${bootstrap?.settings.minComparables ?? 5}+ for scoring`}
+              note={category === 'laptop' ? `Same-parts laptops · ${bootstrap?.settings.minComparables ?? 5}+ sellers for scoring` : `3+ offers indicative · ${bootstrap?.settings.minComparables ?? 5}+ for scoring`}
             />
             <Stat
               label="Good-price finds"
@@ -710,7 +710,7 @@ export default function App() {
                       ? "Collecting local listings"
                       : job.status === "assessing"
                         ? "Reading specifications"
-                        : job.category === 'laptop' ? 'Checking new retail prices' : "Comparing nationwide prices"}
+                        : "Comparing nationwide prices"}
                   </strong>
                   <p>{job.message}</p>
                 </div>
@@ -1024,7 +1024,7 @@ export default function App() {
                 <p>
                   {view === "history" ? "Dated observations outside the current collection"
                     : view === "components" ? "Identified parts with supported prices; whole-PC value remains unpriced"
-                    : category === 'laptop' ? 'Used laptops compared with new retail prices, or historical depreciation when unavailable'
+                    : category === 'laptop' ? 'Used laptops compared with same-parts laptops across Vietnam; MacBooks with new retail or launch prices'
                     : "Local asking prices, with matching used offers across Vietnam"}
                 </p>
                 <p>Prices and budgets in VND · retail prices cached for 7 days</p>
@@ -1183,7 +1183,7 @@ export default function App() {
           <div className="method-note">
             <CircleHelp size={16} />
             <p>
-              Laptops use verified new retail prices, with historical depreciation as a fallback.
+              Laptops other than MacBooks are compared with used laptops of any brand with the same processor and graphics, adjusted for RAM and SSD; a lower current new retail price caps them. MacBooks use new retail prices, with launch-price depreciation as a fallback.
               GPUs and desktops use filtered used asking prices; desktop configurations may be adjusted using verified part prices.
               Any amount strictly below a supported reference qualifies. Equality does not.{" "}
               {canManage ? <button onClick={() => setSettingsOpen(true)}>
@@ -1318,6 +1318,7 @@ function ListingCard({
   const reference = valuation.reference;
   const discount = valuation.discountPercent;
   const adjusted = reference?.kind === "adjusted_configuration";
+  const sameParts = reference?.kind === "parts_market";
   const missingDetails = [...new Set([
     ...(valuation.missingDetails ?? []),
     ...(reference?.missingDetails ?? []),
@@ -1362,7 +1363,7 @@ function ListingCard({
               className={`deal-badge ${reference?.kind === "component_floor" ? "component-badge" : ""}`}
             >
               <TrendingDown size={13} />
-              {valuation.componentOpportunity ? "Below component value" : reference?.retail
+              {valuation.componentOpportunity ? "Below component value" : sameParts ? "Good price vs same-parts laptops" : reference?.retail
                 ? reference.retail.basis === 'current_new' ? 'Good price vs new retail' : 'Good price vs depreciation estimate'
                 : `Good price · below${adjusted ? " adjusted reference" : " market"}`}
             </span>
@@ -1420,7 +1421,9 @@ function ListingCard({
           <div className="reference-box">
             <div>
               <span>
-                {reference.retail ? reference.label : adjusted
+                {reference.retail ? reference.label : sameParts
+                  ? valuation.status === "indicative" ? "Indicative same-parts average" : "Same-parts laptop average"
+                  : adjusted
                   ? valuation.status === "indicative" ? "Indicative adjusted average" : "Component-adjusted average"
                   : valuation.status === "indicative"
                   ? "Indicative average"
@@ -1432,7 +1435,9 @@ function ListingCard({
             </div>
             <div className="reference-caption">
               <span>
-                {reference.retail ? `${reference.sampleCount} retail source${reference.sampleCount === 1 ? '' : 's'} · ${reference.retail.fxStale ? 'stale exchange rate · indicative only' : valuation.status === 'indicative' ? 'indicative only' : valuation.confidence+' confidence'}` : adjusted
+                {reference.retail ? `${reference.sampleCount} retail source${reference.sampleCount === 1 ? '' : 's'} · ${reference.retail.fxStale ? 'stale exchange rate · indicative only' : valuation.status === 'indicative' ? 'indicative only' : valuation.confidence+' confidence'}`
+                  : sameParts ? `${reference.sampleCount} independent seller${reference.sampleCount === 1 ? '' : 's'} · ${valuation.status === 'indicative' ? 'indicative only' : valuation.confidence+' confidence'}`
+                  : adjusted
                   ? `${reference.baseSampleCount ?? reference.adjustedOffers?.length ?? reference.offers.length} computer offers · smallest pool ${reference.sampleCount} sellers`
                   : reference.kind === "component_floor"
                   ? `${reference.components.length} supported components`

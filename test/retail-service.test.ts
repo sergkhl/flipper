@@ -21,7 +21,7 @@ function fixture() {
   const rates = new ExchangeRates(store,async () => { throw new Error('Native VND prices must never request FX'); },() => now);
   const prices = new LaptopPriceBook(store,{lookup:async () => {lookups++;return {status:'complete',checkedAt:new Date(now).toISOString(),offers:[offer],errors:[]};}},() => now,undefined,rates);
   const service = new FlipperService(store,{search:async input => {
-    if (input.location === 'nationwide') { national++; throw new Error('Laptop must not search used peers'); }
+    if (input.location === 'nationwide') { national++; throw new Error('MacBooks must not search used peers'); }
     local++; return {items:[item],total:1};
   },detail:async input => input},undefined,() => new Date(now),prices);
   return {store,service,prices,item,stats:() => ({lookups,national,local}),advance:() => {now+=PRICE_CACHE_MS;}};

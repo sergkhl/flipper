@@ -188,7 +188,8 @@ export default function ListingDrawer({
                     {item.valuation.reference?.kind === "component_floor"
                       ? "Partial parts total; whole-PC value is not established"
                       : item.valuation.opportunity
-                      ? item.valuation.reference?.retail?.basis === 'current_new' ? 'Good price vs new retail'
+                      ? item.valuation.reference?.kind === 'parts_market' ? 'Good price vs same-parts laptops'
+                        : item.valuation.reference?.retail?.basis === 'current_new' ? 'Good price vs new retail'
                         : item.valuation.reference?.retail ? 'Good price vs depreciation estimate' : 'Good price: below the supported reference'
                       : item.valuation.status === 'indicative' ? 'Indicative evidence; no firm verdict' : 'Any amount strictly below qualifies; equality does not'}
                   </small>
@@ -260,20 +261,35 @@ export default function ListingDrawer({
 
           <section className="detail-section">
             <div className="section-heading">
-              <h3>{item.category === 'laptop' ? 'Retail price reference' : 'Nationwide price reference'}</h3>
+              <h3>{item.valuation.reference?.kind === 'parts_market' ? 'Same-parts price reference'
+                : item.category === 'laptop' ? 'Retail price reference' : 'Nationwide price reference'}</h3>
               <span
                 className={`badge ${item.valuation.confidence === "high" ? "green-badge" : ""}`}
               >
                 {item.valuation.confidence} confidence
               </span>
             </div>
-            {item.valuation.reference ? (
+            {item.valuation.reference ? (<>
               <Reference
                 reference={item.valuation.reference}
                 asking={item.price}
                 minComparables={settings?.minComparables ?? 5}
               />
-            ) : (
+              {item.valuation.alternatives?.map((alternative, index) => (
+                <details className="disclosure alternative-reference" key={`${alternative.kind}-${index}`}>
+                  <summary>
+                    <span>
+                      <strong>{alternative.kind === 'parts_market' ? 'Same-parts laptop average'
+                        : alternative.retail?.basis === 'current_new' ? 'Lowest new retail price' : 'Launch-price depreciation estimate'}: {money(alternative.average)}</strong>
+                      <small>{alternative.kind === 'historical_depreciation' ? 'Shown for context; it does not decide or cap the verdict'
+                        : 'Shown beside the deciding reference; the lower firm one decides'}</small>
+                    </span>
+                    <ChevronDown size={15} />
+                  </summary>
+                  <Reference reference={alternative} asking={item.price} minComparables={settings?.minComparables ?? 5} />
+                </details>
+              ))}
+            </>) : (
               <div className="evidence-empty">
                 <ShieldCheck size={22} />
                 <div>
@@ -282,7 +298,9 @@ export default function ListingDrawer({
                   </strong>
                   <p>{item.valuation.reason}</p>
                   <span>
-                    {item.category === 'laptop' ? 'A dated new retail or original launch price is needed for this exact configuration.'
+                    {item.category === 'laptop' ? /mac\s*book/i.test(item.title)
+                      ? 'A dated new retail or original launch price is needed for this exact configuration.'
+                      : `Same-parts comparisons need an exact processor model, graphics, RAM and storage, and at least 3 independent sellers (${Math.max(5, settings?.minComparables ?? 5)} for a verdict).`
                       : `At least 3 independent sellers support an indicative average; scoring needs ${Math.max(5, settings?.minComparables ?? 5)} per required price pool.`}
                   </span>
                 </div>
@@ -520,7 +538,8 @@ function Reference({
 }) {
   if (reference.retail) return <RetailReference reference={reference} />;
   const component = reference.kind === "component_floor";
-  const adjusted = reference.kind === "adjusted_configuration";
+  const sameParts = reference.kind === "parts_market";
+  const adjusted = reference.kind === "adjusted_configuration" || sameParts;
   const baseCount = reference.baseSampleCount ?? reference.adjustedOffers?.length ?? reference.offers.length;
   const indicative = reference.sampleCount < Math.max(5, minComparables);
   return (
@@ -530,7 +549,9 @@ function Reference({
       >
         <div>
           <span>
-            {adjusted
+            {sameParts
+              ? indicative ? "Indicative same-parts average" : "Same-parts laptop average"
+              : adjusted
               ? indicative ? "Indicative adjusted average" : "Component-adjusted average"
               : indicative
               ? "Indicative average"
@@ -548,7 +569,9 @@ function Reference({
       {indicative && (
         <div className="notice warning-notice">
           <Info size={17} />
-          <p>{adjusted
+          <p>{sameParts
+            ? `${reference.sampleCount} independent sellers support this average. At least ${Math.max(5, minComparables)} are needed for a verdict.`
+            : adjusted
             ? `The smallest required price pool has ${reference.sampleCount} independent sellers. Each pool needs at least ${Math.max(5, minComparables)} for discount scoring.`
             : `${reference.sampleCount} independent offers support this average and observed range. At least ${Math.max(5, minComparables)} are needed for discount scoring.`}</p>
         </div>
@@ -562,7 +585,20 @@ function Reference({
           </p>
         </div>
       )}
-      {adjusted && (
+      {sameParts && (
+        <div className="adjusted-evidence-counts">
+          <div>
+            <strong>{reference.sampleCount}</strong>
+            <span>independent sellers with the same processor and graphics</span>
+          </div>
+          <div>
+            <strong>{reference.adjustedOffers?.filter((offer) => !offer.adjustments.length).length ?? 0}</strong>
+            <span>with the same RAM and storage</span>
+          </div>
+          <p>Brand and model line are ignored. Each seller contributes one laptop; RAM and storage differences are priced at reviewed per-GB rates.</p>
+        </div>
+      )}
+      {adjusted && !sameParts && (
         <div className="adjusted-evidence-counts">
           <div>
             <strong>{baseCount}</strong>
@@ -602,7 +638,7 @@ function Reference({
       ) : adjusted ? (
         <>
           <div className="comparison-heading">
-            <h4>{baseCount} computer offers adjusted to this configuration</h4>
+            <h4>{baseCount} {sameParts ? 'laptops compared with' : 'computer offers adjusted to'} this configuration</h4>
             <span>Across Vietnam</span>
           </div>
           <AdjustedOffers offers={reference.adjustedOffers ?? []} />
@@ -618,7 +654,7 @@ function Reference({
       )}
       <p className="footnote">
         Candidate and same-seller offers are excluded. Minimum {Math.max(5, minComparables)}{" "}
-        other independent sellers {adjusted ? "in the computer pool and each required component pool " : ""}for scoring; smaller samples of at least three are indicative only.
+        other independent sellers {adjusted && !sameParts ? "in the computer pool and each required component pool " : ""}for scoring; smaller samples of at least three are indicative only.
         Reference calculated {date(reference.observedAt)}. Each offer shows when its price was observed.
       </p>
       {reference.rejected.length > 0 && (
@@ -827,11 +863,13 @@ function AdjustedOffers({ offers }: { offers: AdjustedComparable[] }) {
                 <summary>
                   <span>
                     <strong>{part.operation === "remove" ? "Deduction" : "Addition"}: {part.label}</strong>
-                    <small>{money(part.average)} per matched item · {part.offers.length} independent sellers</small>
+                    <small>{part.ratePerGb ? `${money(part.ratePerGb)} per GB from the reviewed RAM/SSD table`
+                      : `${money(part.average)} per matched item · ${part.offers.length} independent sellers`}</small>
                   </span>
                   <ChevronDown size={15} />
                 </summary>
-                <OffersTable offers={part.offers} />
+                {part.ratePerGb ? <p className="section-caption">Approximate used-part value, reviewed by hand from stored used listings; it applies whether or not the part is soldered.</p>
+                  : <OffersTable offers={part.offers} />}
               </details>
             ))}
           </div>

@@ -41,8 +41,9 @@ the page in dotted or comma grouping, honour explicit VAT exclusion, survive raw
 control characters in generated JSON-LD, discover pages from all four shops and
 never read pages that name another processor. Model-code tests match Windows
 retail models across wording but never by processor or generation alone.
-Service tests prove laptop collection makes no nationwide used-peer queries,
-VND filtering preserves exact native amounts, offline reads issue no provider
+Service tests prove MacBook collection makes no nationwide used-peer queries,
+other laptops' refreshes search each collected processor once nationwide and store
+same-parts references, VND filtering preserves exact native amounts, offline reads issue no provider
 requests, and price-cache maintenance drains during shutdown and excludes release.
 Native VND retail, depreciation and GPU deals remain usable without FX. Foreign
 references recalculate after successful rate refreshes; failed refreshes retain
@@ -50,9 +51,29 @@ stale estimates across restarts without deal badges. API tests exercise inclusiv
 VND budgets on both public and administrator routes, reject explicit non-VND
 filters, and round-trip saved budgets without currency tags. Formatting tests
 separate VND listing prices from native USD AI costs.
+Same-parts tests cover exact processor models versus families and generations,
+integrated graphics assumed only for low-power processors with no discrete GPU
+named, discrete GPUs that need their video memory, and MacBook exclusion. Review
+notes about the model name, graphics or SSD type become missing details, while
+condition doubts still block a verdict. Five same-RAM/storage sellers decide alone;
+otherwise RAM and SSD differences are priced per GB and offers beyond the 25% limit
+are rejected. Other processors or graphics, duplicate sellers and stale offers never
+count. Verdict tests prove same-parts sellers decide, a lower firm new retail price
+caps them, depreciation estimates remain context, and three sellers stay indicative.
 Indicative laptop estimates that require configuration review remain discoverable
 in both the review and indicative views, without a deal badge or promotion into
 working items. Memory filters and private dismissal still apply.
+
+Same-parts validation on 26 October 2026: all 398 application tests and all 10
+release-policy tests passed with Node 26.12.0, with TypeScript checking and the Vite
+production build. Replaying a copy of the deployed database offline, with
+observation ages ignored, 74 of the 118 non-excluded collection laptops other than
+MacBooks had a parts key, across 45 processors; 43 received a same-parts reference,
+38 of them from five or more sellers, and 35 of the 74 were eligible for a verdict. That pool came from model-name searches; processor searches add more
+offers. Live verdicts additionally need observations within 24 hours. Synthetic browser checks at 1440×1000 and 390×844 showed the same-parts and
+new-retail badges, the same-parts evidence with per-GB adjustments, and retail or
+depreciation context beside the deciding reference, with no page errors or
+horizontal overflow. They used an isolated database and made no external requests.
 
 VND pricing validation on 26 October 2026: all 378 application tests, all 10
 release-policy tests, TypeScript checking and the Vite production build passed

@@ -153,6 +153,8 @@ export interface ComponentAdjustment {
   average: number;
   total: number;
   offers: ComparableOffer[];
+  /** Set when a reviewed per-GB value, rather than component offers, prices the difference. */
+  ratePerGb?: number;
 }
 export interface AdjustedComparable extends ComparableOffer {
   askingPrice: number;
@@ -162,7 +164,7 @@ export interface AdjustedComparable extends ComparableOffer {
 }
 export interface ReferencePrice {
   policyVersion?: number;
-  kind: 'model' | 'configuration' | 'component_floor' | 'adjusted_configuration' | 'retail_new' | 'historical_depreciation';
+  kind: 'model' | 'configuration' | 'component_floor' | 'adjusted_configuration' | 'retail_new' | 'historical_depreciation' | 'parts_market';
   retail?: LaptopPriceEvidence;
   label: string;
   average: number;
@@ -181,6 +183,8 @@ export interface ReferencePrice {
 export interface Valuation {
   status: 'valued' | 'indicative' | 'insufficient_evidence' | 'needs_review' | 'excluded';
   reference: ReferencePrice | null;
+  /** Other evidence shown for context, such as retail or launch prices beside a same-parts laptop average. */
+  alternatives?: ReferencePrice[];
   discountPercent: number | null;
   profit: number | null;
   roiPercent: number | null;

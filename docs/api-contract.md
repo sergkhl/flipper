@@ -109,7 +109,7 @@ imported when present; legacy in-memory manual history is unavailable.
 - `POST /api/jobs/:id/cancel` → `{job: RefreshJob}`.
 - `GET /api/listings/:id` → ListingDetail.
 - `POST /api/listings/:id/state` with partial ListingState → ListingView.
-- `POST /api/listings/:id/analyze` → `{job: RefreshJob}`. This refreshes the detail and focused price evidence (retail for laptops, nationwide used offers for GPUs/desktops); poll the job, then reload the listing.
+- `POST /api/listings/:id/analyze` → `{job: RefreshJob}`. This refreshes the detail and focused price evidence (nationwide same-parts offers and retail for laptops, retail only for MacBooks, nationwide used offers for GPUs/desktops); poll the job, then reload the listing.
 - `POST /api/searches` with `{name, category, query, district?, mode?, maxPrice?, minRamGb?, minVramGb?, includeUnknownMemory?, opportunities?}` → `{search: SavedSearch}`. Memory defaults come from settings when omitted. Saved values, including Any (zero) and false for unknown memory, are restored alongside model/district, asking-price cap and deals-only choice. The client saves legacy `mode: buy`; resale mode is absent from the interface.
 - `DELETE /api/searches/:id` → `{ok: true}`.
 - `POST /api/settings` with partial AppSettings, including persistent `minRamGb`, `minVramGb` and `includeUnknownMemory`, optional `liteLlmKey` string (empty removes the locally saved LiteLLM key) → BootstrapResponse. The client immediately applies saved memory defaults to its toolbar. Legacy resale settings remain compatible but have no interface controls. Keys are never returned. `ai.keySource` is `environment`, `local`, or `null`; `LITELLM_API_KEY` takes precedence over a saved key.
@@ -154,8 +154,8 @@ choices, including an explicit return to 100, survive restart.
 
 The discount rule is strictly `asking < reference`, before display rounding.
 `discountPercent` remains a zero-valued compatibility setting; attempts to set it
-to another value are rejected. `Valuation.opportunity` includes supported laptop
-retail/depreciation and complete or component-adjusted whole-item references. `componentOpportunity`
+to another value are rejected. `Valuation.opportunity` includes supported same-parts
+laptop, laptop retail, MacBook depreciation and complete or component-adjusted whole-item references. `componentOpportunity`
 applies the same strict comparison to a partial component baseline and is excluded from
 market and resale opportunities. `view=components` selects these separate finds;
 `view=indicative` selects references that cannot support a firm verdict. Laptop
@@ -170,7 +170,15 @@ without a currency tag. Bootstrap, listing-feed and detail responses have no
 top-level exchange-rate snapshot; native VND reads and verdicts need no FX.
 AI costs and allowances remain in USD.
 
-Laptop `ReferencePrice.kind` is `retail_new` or `historical_depreciation`.
+Laptops other than MacBooks store a `parts_market` reference: same-parts
+nationwide offers in `offers`/`adjustedOffers`, each with its RAM/SSD
+`adjustments` priced by `ratePerGb`, and `missingDetails` for details that lower
+confidence. The view reads the laptop's retail evidence from cache; when both are
+firm, the lower one becomes `Valuation.reference` and the other is listed in
+`Valuation.alternatives`. A launch-price depreciation estimate is always an
+alternative for these laptops, never the reference of a valued verdict. See ADR 0013.
+
+Laptop retail `ReferencePrice.kind` is `retail_new` or `historical_depreciation`.
 `retail` contains the basis, policy version, `originalVnd`, `referenceVnd`,
 `rangeVnd`, configuration-specific source records with `amountVnd`, class/age/
 retention, lookup status/date and indicative reasons. Source records preserve
@@ -181,8 +189,8 @@ Failed rate refreshes retain those references as visibly stale indicative
 estimates, without deal badges. A missing usable rate leaves foreign evidence
 unpriced. Native VND references use `fx: null`, `fxStale: false` and remain usable.
 One verified retail source can
-support medium confidence; `minComparables` remains a GPU/desktop rule. Old
-laptop used-peer references are ignored. New evidence issues `retail_price` and
+support medium confidence; `minComparables` applies to same-parts laptop, GPU and
+desktop references. Evidence issues `retail_price` and
 `exchange_rate` distinguish missing price provenance from unavailable conversion.
 Ordinary reads resolve from cache without external calls. Collection, analysis
 and bounded background cache maintenance perform retail lookup. See ADR 0012.
