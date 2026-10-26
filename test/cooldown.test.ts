@@ -8,7 +8,7 @@ import { ChototClient } from '../server/chotot.ts';
 import { SourceCooldownError, retryAfterMs } from '../server/source-cooldown.ts';
 import { Store } from '../server/store.ts';
 import { FlipperService } from '../server/service.ts';
-import { DailyScanner } from '../server/scheduler.ts';
+import { DAILY_SCAN_CATEGORY_BUDGETS, DailyScanner } from '../server/scheduler.ts';
 import { LiteLLMClient, RefreshBudget, BudgetExceededError } from '../server/litellm.ts';
 import { appServer } from '../server/http.ts';
 import type { Category, RawListing, RefreshJob, SourceCooldown } from '../shared/types.ts';
@@ -121,7 +121,7 @@ test('desktop and GPU recoveries survive restart, defer noon and share the due d
     assert.equal(scanner.tick(due), null);
     assert.deepEqual(calls, ['desktop', 'gpu', 'laptop']);
     assert.deepEqual(reopened.dailyScanAttempts('2026-10-21').map(a => a.status), ['complete', 'complete', 'complete']);
-    assert.ok(reopened.dailyScanAttempts('2026-10-21').every(a => a.budgetUsd <= .25));
+    assert.ok(reopened.dailyScanAttempts('2026-10-21').every(a => a.budgetUsd <= DAILY_SCAN_CATEGORY_BUDGETS[a.category]));
     assert.equal(reopened.scanRetries().filter(r => r.status === 'complete').length, 2);
     assert.deepEqual(reopened.getSettings(), originalSettings);
   } finally { scanner.stop(); await service.shutdown(); reopened.close(); }
@@ -196,7 +196,7 @@ test('recovery controls are private, blocked manual requests return Retry-After,
   const body = JSON.stringify({ job: failed('desktop', .0185129144), budgetUsd: .25, cooldown: httpCooldown });
   assert.equal((await fetch(base + '/api/scan-retries', { method: 'POST', headers, body })).status, 403);
   assert.equal((await fetch(base + '/admin/api/scan-retries', { method: 'POST', headers: { 'content-type': 'application/json' }, body })).status, 403);
-  assert.equal((await fetch(base + '/admin/api/scan-retries', { method: 'POST', headers, body: JSON.stringify({ job: failed('desktop'), budgetUsd: .5, cooldown: httpCooldown }) })).status, 400);
+  assert.equal((await fetch(base + '/admin/api/scan-retries', { method: 'POST', headers, body: JSON.stringify({ job: failed('desktop'), budgetUsd: .75, cooldown: httpCooldown }) })).status, 400);
   assert.equal(f.store.sourceCooldown(), null); assert.deepEqual(f.store.scanRetries(), []);
   assert.equal((await fetch(base + '/admin/api/scan-retries', { method: 'POST', headers, body: JSON.stringify({ job: failed('desktop'), budgetUsd: .25, cooldown: { ...httpCooldown, until: 'invalid' } }) })).status, 400);
   const response = await fetch(base + '/admin/api/scan-retries', { method: 'POST', headers, body });

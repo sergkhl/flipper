@@ -135,9 +135,13 @@ export function enrichComputerAssessment(raw: RawListing, input: Assessment, cac
       'Several MacBook families are advertised',
       'Several Apple CPU core-count variants are stated', 'Several Apple GPU core-count variants are stated',
     ]);
+    // The MacBook parser replaces an AI profile, so AI notes about that profile's own fields no longer apply.
+    const replacedProfileNote = (note: string) => reparseMac && input.method === 'ai'
+      && /^(?:(?:model|cpu|gpu|gpuClass|vramGb|ramGb|storageGb|storageType) (?:is not stated reliably|has no verifiable supporting quote)|Source parsing and AI disagree about \w+)\.$/.test(note);
+    const retained = (note: string) => !reparsedFields.has(note) && !replacedProfileNote(note);
     assessment.risks = unique([...assessment.risks, ...input.risks]);
-    assessment.conflicts = unique([...assessment.conflicts, ...input.conflicts.filter((note) => !reparsedFields.has(note))]);
-    assessment.unknowns = unique([...assessment.unknowns, ...input.unknowns.filter((note) => !reparsedFields.has(note))]);
+    assessment.conflicts = unique([...assessment.conflicts, ...input.conflicts.filter(retained)]);
+    assessment.unknowns = unique([...assessment.unknowns, ...input.unknowns.filter(retained)]);
     if (assessment.eligibility === 'eligible' && (assessment.conflicts.length || assessment.unknowns.length
       || (input.eligibility === 'review' && assessment.risks.length))) assessment.eligibility = 'review';
   }

@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import type { AIReceipt, Assessment, Evidence, HardwareKind, HardwareProfile, RawListing } from '../shared/types.ts';
 import { DECIDER_MODEL, EMPTY_PROFILE, MIMO_MODEL, liteLLMEndpoints, type LiteLLMEndpoints } from './config.ts';
+import { assessWithRules } from './hardware.ts';
 
 const MIMO_INPUT_PRICE = 0.25; // Conservative USD-per-million ceilings for the fixed MiMo route.
 const MIMO_OUTPUT_PRICE = 0.5;
@@ -100,7 +101,7 @@ const extractionSchema = z.object({
   evidence: z.array(z.object({ field: z.string().trim().min(1).max(40), quote: z.string().trim().min(1).max(500) }).strict()).max(32),
   confidence: z.number().finite().min(0).max(1),
 }).strict();
-type Extraction = z.infer<typeof extractionSchema>;
+export type Extraction = z.infer<typeof extractionSchema>;
 
 // Xiaomi's JSON mode controls syntax, not schema adherence. Supply the actual
 // input contract in the prompt rather than maintaining a weaker second schema.
@@ -193,7 +194,7 @@ const decisionsSchema = z.object({ answers: z.object({
   working_used: noulSchema, damaged_or_repaired: noulSchema, locked_or_parts: noulSchema,
   ambiguous_price: noulSchema, deposit_only: noulSchema, conflicting_specs: noulSchema,
 }) });
-type Decisions = z.infer<typeof decisionsSchema>['answers'];
+export type Decisions = z.infer<typeof decisionsSchema>['answers'];
 
 function truncateBytes(value: string, maximum: number): string {
   const encoded = Buffer.from(value, 'utf8');
@@ -327,7 +328,75 @@ function assessResults(raw: RawListing, decisions: Decisions, extraction: Extrac
   };
 }
 
+/** Classification with the rule parser's quoted specifications, used when extraction would add nothing comparable. */
+export function decisionAssessment(raw: RawListing, decisions: Decisions, rules: Assessment, reason: string): Assessment {
+  const kind = decisions.listing_type.choice;
+  const risks = [...rules.risks], unknowns = [...rules.unknowns], conflicts = [...rules.conflicts];
+  const confidence = Math.min(decisions.listing_type.confidence, decisions.listing_type.probabilities[kind] ?? 0);
+  if (kind !== rules.kind) conflicts.push(`Classifiers disagree on listing type (${kind} / ${rules.kind}).`);
+  if (confidence < 0.85) unknowns.push('Listing classification confidence is below 85%.');
+  if (decisions.working_used.noul < 0.8) unknowns.push('Working used condition is not established confidently.');
+  if (decisions.damaged_or_repaired.noul >= 0.8) conflicts.push('Possible damage or repair needs confirmation.');
+  if (decisions.locked_or_parts.noul >= 0.8) conflicts.push('Possible lock or parts-only sale needs confirmation.');
+  if (decisions.ambiguous_price.noul >= 0.5) conflicts.push('Offered configuration or price is ambiguous.');
+  if (decisions.deposit_only.noul >= 0.8) conflicts.push('Possible deposit-only price needs confirmation.');
+  if (decisions.conflicting_specs.noul >= 0.5) conflicts.push('Essential specifications may conflict.');
+  if (!Number.isFinite(raw.price) || raw.price <= 0) conflicts.push('No positive whole-item asking price is available.');
+  unknowns.push(...essentialUnknowns(kind, rules.profile));
+  const excluded = rules.eligibility === 'excluded' || raw.condition === 'new' || raw.condition === 'repaired' || kind === 'other' || kind === 'wanted';
+  const eligibility = excluded ? 'excluded' : unknowns.length || conflicts.length || risks.length ? 'review' : 'eligible';
+  return { kind, profile: { ...rules.profile }, eligibility, risks: [...new Set(risks)], unknowns: [...new Set(unknowns)],
+    conflicts: [...new Set(conflicts)], evidence: [...rules.evidence], confidence, method: 'ai',
+    status: `Decider classification with quoted rule-parsed specifications; extraction skipped because ${reason}; ${eligibility}.` };
+}
+
+function sourceCondition(raw: RawListing): Assessment {
+  return { kind: raw.category, profile: { ...EMPTY_PROFILE }, eligibility: 'excluded', risks: [raw.condition],
+    unknowns: [], conflicts: [], evidence: [], confidence: 1, method: 'rules', status: `Source condition: ${raw.condition}.` };
+}
+/** Assessments that classification alone settles: out of scope, or extraction skipped by the caller's policy. */
+function classifiedAssessment(raw: RawListing, decisions: Decisions, options: AssessOptions): Assessment | null {
+  if (['other', 'wanted'].includes(decisions.listing_type.choice)
+    && decisions.listing_type.confidence >= 0.85
+    && decisions.listing_type.probabilities[decisions.listing_type.choice] >= 0.85) {
+    return { kind: decisions.listing_type.choice, profile: { ...EMPTY_PROFILE }, eligibility: 'excluded',
+      risks: [decisions.listing_type.choice], unknowns: [], conflicts: [], evidence: [],
+      confidence: decisions.listing_type.confidence, method: 'ai', status: 'Decider: outside the offered hardware scope.' };
+  }
+  const skipped = options.skipExtraction?.(decisions);
+  return skipped ? decisionAssessment(raw, decisions, options.rules ?? assessWithRules(raw), skipped) : null;
+}
+function extractedAssessment(raw: RawListing, decisions: Decisions, extraction: CachedExtraction): Assessment {
+  const assessment = assessResults(raw, decisions, extraction.value);
+  if (extraction.warning) assessment.status += ` ${extraction.warning}`;
+  return assessment;
+}
+/** Rebuilds an assessment from previously paid model outputs; null when a needed output was never cached. */
+export function cachedAIAssessment(raw: RawListing, options: AssessOptions & { cache: AIOutputCache }): Assessment | null {
+  if (raw.condition === 'new' || raw.condition === 'repaired') return sourceCondition(raw);
+  const decisions = options.cache.decisions(raw);
+  if (!decisions) return null;
+  const decided = classifiedAssessment(raw, decisions, options);
+  if (decided) return decided;
+  const extraction = options.cache.extraction(raw);
+  return extraction ? extractedAssessment(raw, decisions, extraction) : null;
+}
+
 interface ClientOptions { key: string; endpoints?: LiteLLMEndpoints; fetch?: typeof fetch; onReceipt?: (receipt: AIReceipt) => void; }
+export interface CachedExtraction { value: Extraction; warning?: string; }
+/** Model outputs are cached under their own prompt versions, so result-handling changes never repeat a paid request. */
+export interface AIOutputCache {
+  decisions(raw: RawListing): Decisions | null;
+  saveDecisions(raw: RawListing, value: Decisions): void;
+  extraction(raw: RawListing): CachedExtraction | null;
+  saveExtraction(raw: RawListing, value: CachedExtraction): void;
+}
+export interface AssessOptions {
+  cache?: AIOutputCache;
+  /** A reason to keep the rule-based specifications after classification, or null to run extraction. */
+  skipExtraction?: (decisions: Decisions) => string | null;
+  rules?: Assessment;
+}
 interface Result<T> { value: T; receipt: AIReceipt; }
 interface ExtractionResult extends Result<Extraction> { warning?: string; }
 interface Recovery { feedback?: string; delayMs?: number; truncated?: boolean; }
@@ -407,23 +476,22 @@ export class LiteLLMClient {
     this.#onReceipt = options.onReceipt;
   }
 
-  async assess(raw: RawListing, budget: RefreshBudget, signal?: AbortSignal): Promise<Assessment> {
-    if (raw.condition === 'new' || raw.condition === 'repaired') {
-      return { kind: raw.category, profile: { ...EMPTY_PROFILE }, eligibility: 'excluded', risks: [raw.condition],
-        unknowns: [], conflicts: [], evidence: [], confidence: 1, method: 'rules', status: `Source condition: ${raw.condition}.` };
+  async assess(raw: RawListing, budget: RefreshBudget, signal?: AbortSignal, options: AssessOptions = {}): Promise<Assessment> {
+    if (raw.condition === 'new' || raw.condition === 'repaired') return sourceCondition(raw);
+    let decisions = options.cache?.decisions(raw) ?? null;
+    if (!decisions) {
+      decisions = (await this.#decide(raw, budget, signal)).value;
+      options.cache?.saveDecisions(raw, decisions);
     }
-    const decisions = await this.#decide(raw, budget, signal);
-    if (['other', 'wanted'].includes(decisions.value.listing_type.choice)
-      && decisions.value.listing_type.confidence >= 0.85
-      && decisions.value.listing_type.probabilities[decisions.value.listing_type.choice] >= 0.85) {
-      return { kind: decisions.value.listing_type.choice, profile: { ...EMPTY_PROFILE }, eligibility: 'excluded',
-        risks: [decisions.value.listing_type.choice], unknowns: [], conflicts: [], evidence: [],
-        confidence: decisions.value.listing_type.confidence, method: 'ai', status: 'Decider: outside the offered hardware scope.' };
+    const decided = classifiedAssessment(raw, decisions, options);
+    if (decided) return decided;
+    let extraction = options.cache?.extraction(raw) ?? null;
+    if (!extraction) {
+      const result = await this.#extract(raw, budget, signal);
+      extraction = { value: result.value, ...(result.warning ? { warning: result.warning } : {}) };
+      options.cache?.saveExtraction(raw, extraction);
     }
-    const extraction = await this.#extract(raw, budget, signal);
-    const assessment = assessResults(raw, decisions.value, extraction.value);
-    if (extraction.warning) assessment.status += ` ${extraction.warning}`;
-    return assessment;
+    return extractedAssessment(raw, decisions, extraction);
   }
 
   async test(budget: RefreshBudget, signal?: AbortSignal): Promise<Array<{ model: string; ok: boolean; error?: string; costUsd?: number }>> {

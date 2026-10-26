@@ -33,8 +33,14 @@ tail, uncertain class/year/launch evidence, conflicting and foreign originals,
 the 90-day original-price window, and indicative estimates beyond eight years.
 One-dong-below and equality cases prove that display rounding cannot set badges.
 Cache tests cover seven-day reuse and restart persistence, expiry, failure
-backoff, provider-date validation, price observation dates, stock/shipping/tax
-evidence, stale structured prices, redirect allowlists and bounded responses.
+backoff, provider-date validation, price observation dates, stock and VAT
+evidence, redirect allowlists and bounded responses. Shop-reader tests skip
+pre-orders, back-orders, display or used units and placeholder amounts without
+failing a lookup, ignore template validity dates, require the structured price on
+the page in dotted or comma grouping, honour explicit VAT exclusion, survive raw
+control characters in generated JSON-LD, discover pages from all four shops and
+never read pages that name another processor. Model-code tests match Windows
+retail models across wording but never by processor or generation alone.
 Service tests prove laptop collection makes no nationwide used-peer queries,
 VND filtering preserves exact native amounts, offline reads issue no provider
 requests, and price-cache maintenance drains during shutdown and excludes release.
@@ -175,6 +181,12 @@ rejection of other invalid values/fields. Persistence checks cover the one-time
 100-to-200 upgrade, later explicit choices, all seven run defaults across restart,
 future manual/daily admission, preserved prior parameters and worker counts,
 lower daily AI allowances, and the 20-worker limit in the API and both pools.
+
+AI-cost tests prove every ad is classified, extraction is skipped for MacBooks,
+classifier rejections and fully stated laptops, cached model outputs rebuild
+assessments without requests after a result-handling change or with AI off, and
+nationwide offers naming another processor never reach AI. Daily-budget tests
+cover the laptop, desktop and graphics-card ceilings within the daily total.
 
 Offline replay of six privately retained MiMo responses through the decoder,
 schema and source-quote validation recovered all six with an unknown price basis

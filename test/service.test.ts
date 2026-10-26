@@ -326,7 +326,7 @@ test('bounded refresh spends detail and comparison work on the active RAM filter
         assert.equal(service.detail('ram64')?.valuation.reference, null);
         assert.ok(!comparisons.some((query) => query.includes('I5-13400')));
       }
-      assert.equal(store.getSettings().aiBudgetUsd, 0.25);
+      assert.equal(store.getSettings().aiBudgetUsd, 0.5);
     } finally { store.close(); }
   }
 });
@@ -366,7 +366,7 @@ test('refresh prioritizes memory matches for ten initial details and verifies ad
     assert.equal(details.length, 13, 'ten initial detail reads plus three verified comparison candidates');
     assert.ok(comparisons.length > 0);
     assert.equal(service.listings('desktop', new URLSearchParams()).total, 3);
-    assert.equal(store.getSettings().aiBudgetUsd, .25);
+    assert.equal(store.getSettings().aiBudgetUsd, .5);
   } finally { store.close(); }
 });
 

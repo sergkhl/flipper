@@ -10,6 +10,13 @@ const YEARS = [0, 1, 3, 5];
 const YEAR_MS = 365.25 * 86_400_000;
 const key = (value: string | null | undefined) => normalize(value ?? '').replace(/^(?:apple|dell|lenovo|hp|asus|acer|msi|intel core)\s+/, '').replace(/[^a-z0-9]/g, '');
 const silicon = (p: HardwareProfile) => /^(?:apple(?: silicon)? )?m\d+\b/i.test(p.cpu ?? '');
+// Manufacturer model codes (ANV15-51, 15ARP9, X1404VA, 83JC00LVVN) identify a model line even when sellers and
+// shops word the family name differently. Processor, capacity and Apple-chip tokens never identify a model.
+function modelCodes(value: string | null | undefined): Set<string> {
+  return new Set((normalize(value ?? '').replace(/([a-z0-9])-(?=\d)/g, '$1').match(/[a-z0-9]+/g) ?? [])
+    .filter(token => token.length >= 5 && /\d/.test(token) && /[a-z]/.test(token)
+      && !/^(?:i[3579]|r[3579]|rtx|gtx|mx|rx|ryzen|core|ultra|ddr|lpddr|gddr|m\d)/.test(token) && !/^\d+(?:gb|tb|hz|mhz|inch)$/.test(token)));
+}
 
 function cpuKey(value: string | null): string | null {
   const text = normalize(value ?? '');
@@ -28,7 +35,9 @@ function cpuKey(value: string | null): string | null {
 export function retailMatch(a: HardwareProfile, b: HardwareProfile): 'exact' | 'partial' | 'different' {
   const model = (p: HardwareProfile) => normalize(p.model ?? '').match(/mac\s*book\s*(air|pro|neo)/)?.[0].replace(/\s+/g,'')
     ?? key(p.model?.replace(/\+/g, ' plus ')).replace(/20\d{2}/g, '');
-  if (!a.model || !b.model || model(a) !== model(b)) return 'different';
+  if (!a.model || !b.model) return 'different';
+  const macModel = /macbook/.test(model(a)) || /macbook/.test(model(b));
+  if (model(a) !== model(b) && (macModel || ![...modelCodes(a.model)].some(code => modelCodes(b.model).has(code)))) return 'different';
   let partial = false;
   const compare = (left: unknown, right: unknown, required = true) => {
     if (left == null || right == null || left === '' || right === '') { if (required) partial = true; return true; }
@@ -128,7 +137,7 @@ export function laptopReference(profile: HardwareProfile, lookup: RetailLookup |
   let ageRange: [number,number] | null = null, retention: number | null = null;
   let values: number[] = [], originalVnd: number | null = null;
   if (basis === 'current_new') {
-    if (!credible.length) reasons.push('Vietnam delivery or the complete unconditional purchase cost is unverified.');
+    if (!credible.length) reasons.push('A VAT-inclusive cash price from a reviewed Vietnamese shop is unverified.');
     values = sources.map(o => o.amountVnd);
   } else {
     if (!lookup || lookup.status !== 'complete' || !freshDate(lookup.checkedAt, now)

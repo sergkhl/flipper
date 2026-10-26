@@ -275,7 +275,7 @@ export default function SettingsDrawer({
           </div>
           <NumberField
             label="Default AI allowance per run"
-            unit="USD · daily scans cap each category at $0.25"
+            unit="USD · daily scans cap laptops at $0.50, desktops and graphics cards at $0.25"
             value={draft.aiBudgetUsd}
             min={0}
             max={10}

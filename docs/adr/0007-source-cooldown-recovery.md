@@ -30,8 +30,9 @@ terminal outcome updates the durable record before releasing the busy gate.
 The daily eligibility boundary remains 12:00 PM noon Asia/Ho_Chi_Minh. Cooldown
 deferral consumes no daily claim. Due recoveries take priority. When a recovery
 has the same scope as an unstarted due daily category, both share one job and
-the tighter allowance, at most USD 0.25. The daily journal conservatively includes
-the recovery's earlier costs and keeps its USD 0.75 nominal-day admission limit.
+the tighter allowance, at most that category's daily ceiling (USD 0.50 for laptops,
+USD 0.25 otherwise). The daily journal conservatively includes the recovery's
+earlier costs and keeps its USD 1.00 nominal-day admission limit.
 This can run a recovery category before the usual laptop/desktop/GPU order.
 Different scopes retain separate work. Ordinary downtime still catches up only
 the current daily date; explicit source-cooldown recoveries can cross dates.

@@ -389,7 +389,7 @@ export interface DailyScanStatus {
   timeZone: string;
   time: string;
   categories: Category[];
-  perCategoryBudgetUsd: number;
+  perCategoryBudgetUsd: Record<Category, number>;
   dailyBudgetUsd: number;
   nextRunAt: string | null;
   state: 'disabled' | 'scheduled' | 'due' | 'busy' | 'maintenance' | 'running' | 'cooldown' | 'request_budget' | 'proxy';

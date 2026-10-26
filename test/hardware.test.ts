@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assessWithRules, cpuModels, gpuModels, profileKey } from '../server/hardware.ts';
+import { assessWithRules, cpuModels, gpuModels, profileKey, retailLaptopModel } from '../server/hardware.ts';
 import { raw } from './helpers.ts';
 
 test('GPU variant and VRAM stay distinct; multiple models go to review', () => {
@@ -245,4 +245,54 @@ test('a bare T denotes terabytes only inside an explicit storage claim', () => {
     const precedingWarranty = assessWithRules(raw('warranty-before', 18_000_000, { category: 'desktop', title: 'PC i5-13500 RAM32GB', description: `${warranty} NVMe SSD` }));
     assert.equal(precedingWarranty.profile.storageGb, null, warranty);
   }
+});
+
+test('2023+ processor names and seller shorthand get one canonical identity', () => {
+  assert.deepEqual(cpuModels('Intel Core Ultra 7 155H'), ['CORE ULTRA 7 155H']);
+  assert.deepEqual(cpuModels('Core 5 210H / Core Ultra 5 226V'), ['CORE 5 210H', 'CORE ULTRA 5 226V']);
+  assert.deepEqual(cpuModels('AMD Ryzen AI 9 HX 370'), ['RYZEN AI 9 HX 370']);
+  assert.deepEqual(cpuModels('Ryzen 7 H255 / Ryzen 5 220'), ['RYZEN 7 H 255', 'RYZEN 5 220']);
+  assert.deepEqual(cpuModels('R7-4800H, Ryzen 7 PRO 5850U'), ['RYZEN 7 4800H', 'RYZEN 7 PRO 5850U']);
+  assert.deepEqual(cpuModels('Legion R7000 2023'), [], 'a laptop model code is not a processor');
+  assert.deepEqual(cpuModels('Ryzen 5 512 GB'), []);
+  assert.deepEqual(cpuModels('i5 core 5 nhân'), []);
+});
+
+test('laptop workstation GPUs need no Quadro prefix, while ThinkPad model numbers stay laptops', () => {
+  assert.deepEqual(gpuModels('NVIDIA T1200 4GB'), ['QUADRO T1200']);
+  assert.deepEqual(gpuModels('RTX A1000 6GB'), ['QUADRO A1000']);
+  assert.deepEqual(gpuModels('Quadro RTX A2000'), ['QUADRO A2000']);
+  assert.deepEqual(gpuModels('NVIDIA RTX 2000 Ada 8GB'), ['RTX 2000 ADA']);
+  assert.deepEqual(gpuModels('Lenovo ThinkPad T550 i5-5300U'), []);
+  assert.deepEqual(gpuModels('Quadro T550 4GB'), ['QUADRO T550']);
+  assert.deepEqual(gpuModels('Intel Arc A370M'), ['ARC A370M']);
+  const ultra = assessWithRules(raw('arc', 20_000_000, { category: 'laptop', title: 'Zenbook 14 Core Ultra 7 155H Intel Arc Graphics' }));
+  assert.equal(ultra.profile.cpu, 'CORE ULTRA 7 155H'); assert.equal(ultra.profile.gpuClass, 'integrated');
+});
+
+test('upgrade limits are not installed capacities, while stated upgrades remain installed', () => {
+  const limited = assessWithRules(raw('limit', 15_000_000, { category: 'laptop', title: 'Lenovo LOQ 15IRH8 i5-12450H RTX 4050 6GB',
+    description: 'RAM 16GB DDR5 (hỗ trợ tối đa 32GB)\nSSD 512GB NVMe, nâng cấp tối đa 2TB' }));
+  assert.equal(limited.profile.ramGb, 16); assert.equal(limited.profile.storageGb, 512); assert.deepEqual(limited.conflicts, []);
+  const upgraded = assessWithRules(raw('upgraded', 9_000_000, { category: 'laptop', title: 'Dell Latitude 5420 i5-1145G7',
+    description: 'Máy đã nâng cấp lên 16GB RAM, SSD 256GB' }));
+  assert.equal(upgraded.profile.ramGb, 16); assert.equal(upgraded.profile.storageGb, 256);
+});
+
+test('current shop model lines are recognized from retail product titles', () => {
+  for (const [title, model] of [
+    ['Laptop Asus Vivobook S16 S3607CA-SH083WS (Core Ultra 7 255H)', 'ASUS VIVOBOOK S16 S3607CA'],
+    ['Laptop Acer Aspire Lite 14 AL14-51M-59K9', 'ACER ASPIRE LITE 14 AL14-51M'],
+    ['Laptop HP 14-ep1007TU 9Z2V0PA', 'HP 14-EP1007TU'],
+    ['Laptop HP OmniBook 5 AI 16-af1046TU', 'HP OMNIBOOK 5 AI 16-AF1046TU'],
+    ['Laptop Lenovo Legion Slim 7 16IRH8 82Y3', 'LENOVO LEGION SLIM 7 16IRH8'],
+    ['Laptop Lenovo LOQ 15ARP9 83JC00LVVN', 'LENOVO LOQ 15ARP9'],
+    ['Laptop MSI GF63 Thin 11SC-664VN', 'MSI GF63 THIN 11SC'],
+    ['Laptop Acer Gaming Nitro V ANV15-51-75GS', 'NITRO V ANV15-51'],
+    ['Máy tính xách tay/ Laptop Acer Gaming Nitro V 15 - ANV15-41-R732 (AMD Ryzen 5-6600H)', 'NITRO V 15 ANV15-41'],
+    ['Laptop ACER Gaming Nitro ProPanel ANV15-52-50RB', 'NITRO PROPANEL ANV15-52'],
+    ['Laptop Asus ExpertBook B1 BM1403CDA-S61611W', 'ASUS EXPERTBOOK B1 BM1403CDA'],
+    ['Laptop HP Omni 5 16-af1048TU', 'HP OMNI 5 16-AF1048TU'],
+  ]) assert.equal(retailLaptopModel(title!), model);
+  assert.equal(retailLaptopModel('Chuột không dây Logitech'), null);
 });

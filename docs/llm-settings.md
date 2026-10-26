@@ -33,14 +33,32 @@ Do not prepend `openrouter/` to this Decisions model ID. Model availability need
 current gateway/provider verification; there is no silent model substitution.
 
 Source-supported quotes are validated. AI never invents installed capacities,
-market prices, comparisons or discounts. Caches include an assessment-contract
-version. Missing keys, provider failures and exhausted budgets leave conservative
-interpretation and fetched evidence available with explicit status.
+market prices, comparisons or discounts. Missing keys, provider failures and
+exhausted budgets leave conservative interpretation and fetched evidence available
+with explicit status.
 
-Manual jobs use the saved AI allowance or a launch override. Scheduled jobs use
-the saved allowance, capped at USD
-0.25 per category and USD 0.75 in admitted allowances per nominal Vietnam
-schedule day. Reservations are made before requests; unknown billing consumes
+Classification runs for every listing the rules do not already exclude. Extraction,
+about 90% of the cost of an assessment, runs only when it can add comparable
+facts. It is skipped for MacBooks, whose specifications the MacBook parser
+re-derives; when classification does not accept the ad as a working used item at a
+cash price (working-used below 0.8, or damage, lock/parts-only or deposit at 0.8 or
+more); and for laptops whose quoted seller text already states model, processor,
+graphics (with video memory for a discrete GPU), RAM, storage capacity and type.
+Those assessments combine the rule parser's quoted facts with the classifier's
+signals, and their status names the reason. Nationwide comparison offers whose own
+text names only another processor (or graphics card, for card pools), or several,
+are not sent to AI: they cannot match the pool's target.
+
+Classifier and extractor outputs are cached by listing content under their own
+versions (`DECIDER_OUTPUT_VERSION`, `EXTRACTION_OUTPUT_VERSION`), which change only
+with a model, its prompt or its output schema. `AI_ASSESSMENT_VERSION` covers result
+handling: increasing it rebuilds assessments from the cached outputs without new
+requests, also when AI is off or its allowance is spent.
+
+Manual jobs use the saved AI allowance (USD 0.50 by default) or a launch override.
+Scheduled jobs use the saved allowance, capped at USD 0.50 for laptops and USD 0.25
+each for desktops and graphics cards, with USD 1.00 in admitted allowances per
+nominal Vietnam schedule day. Reservations are made before requests; unknown billing consumes
 the reservation. The full category allowance is persisted before a scheduled
 attempt, so a crash cannot replenish it. A provider-reported overage seals that
 job's AI budget and reduces later category admission. These are request-admission

@@ -109,11 +109,12 @@ from 1 to 20 over direct gateway connections with shared spending reservations.
 The Runs form can explicitly save its seven parameter defaults on the server
 for future manual and daily work. Category/search remain launch-specific;
 existing runs and recoveries retain their captured parameters. Daily AI allowances
-use the saved default subject to the USD 0.25 category ceiling. See ADRs 0009–0011.
+use the saved default subject to category ceilings of USD 0.50 for laptops and
+USD 0.25 for desktops and GPUs, within USD 1.00 a day. See ADRs 0009–0011.
 
 **Reference price**:
 A supported comparison value. Laptops use the lowest verified exact-configuration
-new retail price including known Vietnam purchase costs, or original launch price
+VAT-inclusive new retail price from a reviewed Vietnamese shop, or original launch price
 times historical retained value after a successful current-price absence check.
 See ADR 0012 for the source hierarchy, seven-day caches and depreciation policy.
 GPUs and desktops use a filtered arithmetic mean of matching nationwide used
@@ -186,7 +187,11 @@ claim that the listing is still available or that a completed sale occurred.
 Decider classifies a listing's type, eligibility and ambiguity. MiMo extracts
 stated hardware specifications and supporting seller-text quotes. Numeric price
 references and opportunity calculations use retrieved offers and deterministic
-arithmetic. A manual refresh has a configurable USD 0.25 initial AI budget.
+arithmetic. A manual refresh has a configurable initial AI budget (USD 0.50 by
+default). Every ad is classified; extraction is skipped for MacBooks, for ads the
+Decider does not accept as working used items at a cash price, and for laptops
+whose quoted text already states their configuration. Paid model outputs are
+cached under their own prompt versions and reused when result handling changes.
 Quoted deterministic facts can fill AI omissions; conflicting claims remain
 in review. An unambiguous single-model GPU offer at a whole-item price may be
 interpreted as one card without an explicit quantity word. Bundle or multi-card

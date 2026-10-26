@@ -89,20 +89,28 @@ comparison remain separate gates; this benchmark does not measure good deals.
 
 ## Source decision
 
-Keep the existing free current adapters while preserving explicit failure and
-coverage limits. The sample demonstrates poor current coverage; it does not
-justify describing either adapter as a comprehensive pricing service. SerpAPI
-discovery was explicitly skipped and no replacement service was adopted.
-The verified historical additions and source/date boundaries are recorded in
-[data sources](data-sources.md). Foreign MSRP is always indicative, current
+The sample showed that both original adapters rejected every Windows offer:
+HACOM marks "order now, deliver later" items as pre-orders, and An Phát publishes
+past template validity dates on every page. Pre-orders are now skipped instead
+of failing a lookup, template validity dates are ignored, and the price has to
+appear on the page. Phong Vũ and TNC were added after a 26 October survey of 24
+Vietnamese shops; see [data sources](data-sources.md) for their evidence and the
+shops that refuse this server. SerpAPI and "any Vietnamese shop" discovery were
+evaluated and not adopted.
+
+Wayback Machine captures of shop pages were measured against these twenty cases
+on 26 October: 6 of 20 had an exact-configuration price within 90 days of release
+(one Windows laptop and five MacBooks), and 11 of 20 at any age. Two captures that
+fill gaps were added to the reviewed book; the others confirm existing MacBook rows.
+Later captures are not launch evidence. Foreign MSRP is always indicative, current
 verified retail still wins directly, and the seven-day price/FX caches remain.
 
 A future proposed provider must be evaluated against these same twenty cases.
-Count exact, purchasable, unconditional prices with known VAT and Vietnam
-delivery separately from search hits, out-of-stock pages, partial configurations
-and historical estimates. Adopt it based on demonstrated additional usable
-matches, cost and request reliability. Improving source coverage and resolving
-seller specifications are both needed before these examples can get firm badges.
+Count exact, purchasable, unconditional VAT-inclusive prices separately from search
+hits, out-of-stock pages, partial configurations and historical estimates. Adopt it
+based on demonstrated additional usable matches, cost and request reliability.
+Most of these laptops are no longer sold new, so current shops can price only the
+recent ones.
 
 ## Reproduction
 

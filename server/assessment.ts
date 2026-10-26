@@ -1,5 +1,7 @@
 import type { Assessment, HardwareProfile, RawListing } from '../shared/types.ts';
 import { assessWithRules, normalize } from './hardware.ts';
+import type { Decisions } from './litellm.ts';
+import { isMacBookListing } from './macbook.ts';
 
 const priceConflict = 'A stated cash price in the description differs from the displayed asking price';
 const essential = new Set<keyof HardwareProfile>(['model', 'cpu', 'gpu', 'gpuClass', 'vramGb', 'ramGb', 'storageGb', 'storageType']);
@@ -56,4 +58,28 @@ export function reconcileAssessment(raw: RawListing, input: Assessment): Assessm
   return { ...input, profile, evidence: evidence.filter((item, index, all) =>
     all.findIndex(other => other.field === item.field && other.quote === item.quote) === index),
     conflicts: mergedConflicts, unknowns, risks, eligibility };
+}
+
+/** Laptop fields that current comparisons read. Retail matching needs the model; RAM/SSD types may stay generic. */
+function laptopKeyComplete(rules: Assessment): boolean {
+  const p = rules.profile;
+  return rules.eligibility !== 'excluded' && !rules.conflicts.length && !!p.model && !!p.cpu && !!p.ramGb && !!p.storageGb
+    && !!p.storageType && !!p.gpu && !!p.gpuClass && (p.gpuClass === 'integrated' || !!p.vramGb);
+}
+
+/**
+ * Extraction is the expensive request. Classification still runs for every ad; extraction is skipped when the
+ * classifier rules the ad out, when quoted rule facts already hold the laptop comparison key, and for MacBooks,
+ * whose specifications the MacBook parser re-derives regardless.
+ */
+export function extractionSkipReason(raw: RawListing, decisions: Decisions, rules: Assessment): string | null {
+  if (isMacBookListing(raw)) return 'the MacBook parser reads MacBook specifications';
+  if (decisions.working_used.noul < 0.8 || decisions.damaged_or_repaired.noul >= 0.8
+    || decisions.locked_or_parts.noul >= 0.8 || decisions.deposit_only.noul >= 0.8) {
+    return 'classification did not accept it as a working used item at a cash price';
+  }
+  if (decisions.listing_type.choice === 'laptop' && rules.kind === 'laptop' && laptopKeyComplete(rules)) {
+    return 'quoted seller text already states the laptop configuration';
+  }
+  return null;
 }

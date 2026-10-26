@@ -126,11 +126,11 @@ test('restart marks unfinished runs interrupted and retains uncertain AI allowan
     store.saveRun({ ...run, state: 'assessing', job: { ...run.job, status: 'assessing', completedAt: null, aiCostUsd: .01 } });
     await service.shutdown(); service = new FlipperService(store, emptySource);
     assert.equal(store.getRun(first.id)?.state, 'interrupted');
-    assert.equal(store.getRun(first.id)?.job.aiCostUsd, .25);
+    assert.equal(store.getRun(first.id)?.job.aiCostUsd, .5);
     assert.equal(service.tryStartDailyRefresh(), null);
     const resumed = service.resumeRun(first.id); await settled(service);
-    assert.equal(resumed.aiCostUsd, .25);
-    assert.equal(store.getRun(resumed.id)?.parameters.aiBudgetUsd, .25);
+    assert.equal(resumed.aiCostUsd, .5);
+    assert.equal(store.getRun(resumed.id)?.parameters.aiBudgetUsd, .5);
   } finally { await service.shutdown(); store.close(); }
 });
 
@@ -169,7 +169,7 @@ test('startup reconciles durable queue transitions before marking runs interrupt
     store.claimScanRetry(new Date(future)); // Crash after claim, before launching its new attempt.
     await service.shutdown(); service = new FlipperService(store, source, undefined, () => new Date(future));
     assert.equal(store.getRun(first.id)?.state, 'interrupted');
-    assert.equal(store.getRun(first.id)?.job.aiCostUsd, .25);
+    assert.equal(store.getRun(first.id)?.job.aiCostUsd, .5);
   } finally { await service.shutdown(); store.close(); }
 });
 

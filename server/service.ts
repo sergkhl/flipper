@@ -3,8 +3,8 @@ import type { AIStatus, AdminBootstrapResponse, AppSettings, Assessment, Categor
 import { DECIDER_MODEL, DEFAULT_SETTINGS, MIMO_MODEL } from './config.ts';
 import { ChototClient } from './chotot.ts';
 import { enrichComputerAssessment, expandPricedConfigurations } from './computer.ts';
-import { assessWithRules, cpuModels, gpuModels, normalize, profileKey, sourceUnavailable } from './hardware.ts';
-import { BudgetExceededError, LiteLLMClient, RefreshBudget } from './litellm.ts';
+import { assessWithRules, cpuModels, gpuModels, listingText, normalize, profileKey, sourceUnavailable } from './hardware.ts';
+import { BudgetExceededError, cachedAIAssessment, LiteLLMClient, RefreshBudget, type AIOutputCache, type CachedExtraction, type Decisions } from './litellm.ts';
 import { adjustmentRequirements, buildReference, filterComparableOffers, type AssessedListing, valueListing } from './pricing.ts';
 import { EMPTY_STATE, Store, assessmentHash, type StoredListing } from './store.ts';
 import type { LaptopSpecRequest, MemoryPartRequest, MemoryTypeLookup } from './techapi.ts';
@@ -12,7 +12,7 @@ import { laptopSpecRequest } from './laptop-specs.ts';
 import { dailyScanStatus } from './scheduler.ts';
 import type { ScanRetry, SourceCooldown } from '../shared/types.ts';
 import { activeCooldown, SourceCooldownError } from './source-cooldown.ts';
-import { reconcileAssessment } from './assessment.ts';
+import { extractionSkipReason, reconcileAssessment } from './assessment.ts';
 import { ProxyPool } from './proxies.ts';
 import { AUTOMATIC_PART_SEARCHES, LOCAL_DETAIL_LIMIT, NATIONAL_OFFER_LIMIT, SourceDeferredError } from './source-policy.ts';
 import type { RefreshProgress } from '../shared/types.ts';
@@ -67,6 +67,15 @@ function capacityUnknown(note: string, assessment: Assessment): boolean {
     || !/\b(?:unknown|missing|unstated|unspecified|required|not (?:known|stated|specified|provided|verified)|no .*stated)\b/.test(text)) return false;
   return (p.ramGb === null && /\b(?:ram|system memory)\b/.test(text))
     || (p.vramGb === null && /\b(?:vram|video[- ]memory|gpu memory)\b/.test(text));
+}
+
+/** An offer whose own text names only other processors (or graphics cards) cannot match this pool; it needs no AI. */
+function offTarget(kind: HardwareKind, target: HardwareProfile, raw: RawListing): boolean {
+  const identity = kind === 'gpu' ? target.gpu : ['desktop', 'laptop', 'cpu'].includes(kind) ? target.cpu : null;
+  if (!identity) return false;
+  const named = kind === 'gpu' ? gpuModels(listingText(raw)) : cpuModels(listingText(raw));
+  const wanted = (kind === 'gpu' ? gpuModels(identity) : cpuModels(identity))[0] ?? identity.toUpperCase();
+  return named.length > 1 || named.length === 1 && named[0] !== wanted;
 }
 
 function onlyUnknownMemoryNeedsReview(item: ListingView, reference: ReferencePrice | null): boolean {
@@ -512,21 +521,33 @@ export class FlipperService {
       aiIssue: this.budgetLimited ? 'AI allowance exhausted; conservative parsing continued' : this.aiError,
       settings, progress: context.progress, retryId: context.retryId }, this.now());
   }
-  private assessed(raw: RawListing, context: JobContext): Promise<Assessment> {
+  private assessed(raw: RawListing, context: JobContext, rulesOnly = false): Promise<Assessment> {
     this.checkWork(context);
+    // A rules-only result for one comparison pool must not stand in for an AI assessment another pool needs.
+    if (rulesOnly) return Promise.resolve(this.memoryAssessment(raw, assessWithRules(raw)));
     const hash = assessmentHash(raw), existing = context.assessments.get(hash);
     if (existing) return existing;
     const pending = context.aiGate.run(() => this.assessOne(raw, context), context.abort.signal);
     context.assessments.set(hash, pending); return pending;
   }
+  private modelOutputs: AIOutputCache = {
+    decisions: raw => this.store.modelOutput<Decisions>('decider', raw),
+    saveDecisions: (raw, value) => this.store.saveModelOutput('decider', raw, value),
+    extraction: raw => this.store.modelOutput<CachedExtraction>('extraction', raw),
+    saveExtraction: (raw, value) => this.store.saveModelOutput('extraction', raw, value),
+  };
   private async assessOne(raw: RawListing, context: JobContext): Promise<Assessment> {
     this.checkWork(context);
     if (sourceUnavailable(raw)) return this.memoryAssessment(raw, assessWithRules(raw));
     const cached = this.store.cachedAssessment(raw); if (cached) return this.memoryAssessment(raw, cached);
     const rules = this.memoryAssessment(raw, assessWithRules(raw));
-    if (!context.ai || context.aiStopped || rules.eligibility === 'excluded') return rules;
+    if (rules.eligibility === 'excluded') return rules;
+    const options = { cache: this.modelOutputs, rules, skipExtraction: (decisions: Decisions) => extractionSkipReason(raw, decisions, rules) };
+    // Earlier model outputs stay usable after result-handling changes, and when AI is off or out of allowance.
+    const reused = cachedAIAssessment(raw, options);
+    if (!reused && (!context.ai || context.aiStopped)) return rules;
     try {
-      const assessment = await context.ai.assess(raw, context.budget, context.abort.signal);
+      const assessment = reused ?? await context.ai!.assess(raw, context.budget, context.abort.signal, options);
       // Canonical names reflect only stated identifiers; no new specification or price is inferred.
       const gpus = assessment.profile.gpu ? gpuModels(assessment.profile.gpu) : [];
       const cpus = assessment.profile.cpu ? cpuModels(assessment.profile.cpu) : [];
@@ -540,7 +561,7 @@ export class FlipperService {
       assessment.conflicts = [...new Set([...assessment.conflicts, ...rules.conflicts])];
       if (assessment.eligibility === 'eligible' && assessment.conflicts.length) assessment.eligibility = 'review';
       const resolved = this.memoryAssessment(raw, assessment);
-      context.aiFailures = 0;
+      if (!reused) context.aiFailures = 0;
       this.store.cacheAssessment(raw, resolved); return resolved;
     } catch (error) {
       if (context.abort.signal.aborted) throw error;
@@ -768,7 +789,7 @@ export class FlipperService {
       for (let offset = 0; offset < progress.raws.length; offset += context.settings.aiWorkers) {
         const batch = await this.parallel(context, progress.raws.slice(offset, offset + context.settings.aiWorkers), async raw => {
           const hash = assessmentHash(raw), existing = assessed.get(raw.id);
-          const assessment = existing?.hash === hash ? existing.assessment : await this.assessed(raw, context);
+          const assessment = existing?.hash === hash ? existing.assessment : await this.assessed(raw, context, offTarget(kind, target.assessment.profile, raw));
           assessed.set(raw.id, { hash, assessment });
           if (!this.store.getListing(raw.id)?.local) this.store.putListing(raw, assessment, false);
           return { raw, assessment };
