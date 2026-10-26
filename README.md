@@ -112,8 +112,9 @@ collection, detail checks, optional AI, specification cache and nationwide price
 comparisons as manual refreshes. Persistent memory defaults and current scan
 limits apply; display filters and saved searches do not create extra jobs.
 
-Scheduled AI request budgets are **USD 0.25 per category and USD 0.75 per nominal
-Vietnam schedule day**, separate from the editable manual-job budget. Each
+Scheduled AI request budgets are **USD 0.50 for laptops, USD 0.25 each for desktops
+and graphics cards, and USD 1.00 per nominal Vietnam schedule day**, separate from
+the editable manual-job budget (USD 0.50 by default). Each
 attempt reserves its allowance durably before starting. External billing can
 exceed an estimate; reported overages reduce later scheduled AI admission.
 Unknown costs and interrupted attempts retain their reservation. Missing keys,
@@ -144,12 +145,15 @@ integration is configured. Operate one server process per data directory.
 ## How prices are compared
 
 - **Laptops:** compare with the lowest verified factory-new cash offer for the
-  exact configuration, including known VAT and Vietnam delivery. Current new
+  exact configuration at four reviewed Vietnamese shops (HACOM, An Phát, Phong Vũ
+  and TNC). Their VAT-inclusive listed price is the purchase cost; delivery is not
+  added. Pre-orders, display or activated units and "contact us" placeholders are
+  skipped, and the structured price must appear on the page. Current new
   prices are used directly. When a successful current lookup finds none, apply
   the agreed depreciation curve to a documented original launch price. Unknown
   configuration/class/release timing and conflicting evidence show an indicative
-  range without a badge. The reviewed history includes M1/M2/M4 MacBooks and
-  Surface Pro 7/7+ configurations; unsupported laptops remain unpriced. See the
+  range without a badge. The reviewed history includes M1/M2/M4 MacBooks, Surface
+  Pro 7/7+ and Acer Nitro V 15 configurations; unsupported laptops remain unpriced. See the
   [source evidence](docs/data-sources.md) and [coverage benchmark](docs/laptop-price-benchmark.md).
   [ADR 0012](docs/adr/0012-laptop-retail-pricing.md) defines the curves.
 - **VND pricing:** listing prices, comparisons and maximum-price inputs use VND.
@@ -263,7 +267,7 @@ allowances remain fixed. A new run is needed to change those parameters.
 **Save defaults** in the run form persists its listing target, national comparison
 limit, AI allowance/enable switch and memory filters across visits and restarts.
 Future manual and daily runs use these defaults; daily AI admission still caps
-each category at USD 0.25. Starting a run alone uses its edits for that run.
+laptops at USD 0.50 and desktops/graphics cards at USD 0.25. Starting a run alone uses its edits for that run.
 Category and model search remain launch-specific. Existing installations using
 the old 100-listing default upgrade to 200 once; later saved choices persist.
 
@@ -299,7 +303,11 @@ Hardware extraction uses `xiaomi_mimo/mimo-v2.6-flash` through Chat Completions;
 classification uses `perplexity/pplx-decider-v1.2` through the separate
 OpenRouter Decisions passthrough. Configure gateway URLs in `.env.example`.
 AI extracts source-supported claims; deterministic code calculates prices and
-discounts. Route availability and model quality need their own verification.
+discounts. Every ad is classified; extraction is skipped for MacBooks, for ads the
+classifier does not accept as working used items at a cash price, and for laptops
+whose quoted text already states their configuration. Paid model outputs are cached
+under their own prompt versions, so result-handling changes do not repeat them.
+Route availability and model quality need their own verification.
 See [LLM settings](docs/llm-settings.md).
 
 ## Specification data and licensing

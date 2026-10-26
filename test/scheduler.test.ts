@@ -59,7 +59,7 @@ test('noon runs all three full refreshes sequentially once, even with competing 
   }
   assert.equal(f.scanner.tick(noon), null);
   assert.deepEqual(f.store.dailyScanAttempts('2026-10-20').map(a => [a.category, a.status, a.budgetUsd]),
-    [['laptop', 'complete', .25], ['desktop', 'complete', .25], ['gpu', 'complete', .25]]);
+    [['laptop', 'complete', .5], ['desktop', 'complete', .25], ['gpu', 'complete', .25]]);
   assert.equal(calls.length, 3);
   assert.equal(f.service.scheduleStatus(noon).nextRunAt, '2026-10-21T05:00:00.000Z');
 });
@@ -114,7 +114,7 @@ test('restart retains the full allowance for a claim with no completion and resu
     reopened.interruptDailyScans(new Date('2026-10-20T06:00:00Z'));
     assert.equal(reopened.dailyScanControl().enabled, true);
     assert.equal(reopened.dailyScanAttempts('2026-10-20')[0].status, 'interrupted');
-    assert.equal(reopened.dailyScanAttempts('2026-10-20')[0].budgetUsd, .25);
+    assert.equal(reopened.dailyScanAttempts('2026-10-20')[0].budgetUsd, .5);
   } finally { reopened.close(); }
   assert.equal(f.scanner.tick(noon)?.category, 'desktop'); await complete(f.service);
   assert.equal(f.scanner.tick(noon)?.category, 'gpu'); await complete(f.service);
@@ -132,19 +132,31 @@ test('downtime catches up only the current Vietnam day and midnight never starts
   assert.equal(f.scanner.tick(new Date('2026-10-23T05:00:00Z'))?.category, 'laptop'); await complete(f.service);
 });
 
-test('scheduled budgets cap larger defaults at 0.25 and overreported cost reduces later admission', async t => {
+test('scheduled budgets cap larger defaults per category and overreported cost reduces later admission', async t => {
   const f = fixture(t); f.store.saveSettings({ ...f.store.getSettings(), aiBudgetUsd: 3 });
   f.service.configureDailyScans(true, before);
   const first = f.store.claimDailyScan(f.store.getSettings(), noon)!;
-  assert.equal(first.settings.aiBudgetUsd, .25); assert.equal(f.store.getSettings().aiBudgetUsd, 3);
+  assert.equal(first.attempt.category, 'laptop');
+  assert.equal(first.settings.aiBudgetUsd, .5); assert.equal(f.store.getSettings().aiBudgetUsd, 3);
   const job = { id: 'fixture', category: 'laptop' as const, query: '', status: 'complete' as const,
     message: 'Fixture completion', scanned: 0, target: 20, assessed: 0, benchmarked: 0, totalAvailable: 0,
-    requestCount: 0, aiCostUsd: .6, error: null, startedAt: noon.toISOString(), completedAt: noon.toISOString() };
+    requestCount: 0, aiCostUsd: .9, error: null, startedAt: noon.toISOString(), completedAt: noon.toISOString() };
   f.store.recordDailyScan('2026-10-20', job);
   const second = f.store.claimDailyScan(f.store.getSettings(), noon)!;
-  assert.ok(Math.abs(second.settings.aiBudgetUsd - .15) < 1e-10);
+  assert.ok(Math.abs(second.settings.aiBudgetUsd - .1) < 1e-10);
   assert.equal(f.store.claimDailyScan(f.store.getSettings(), noon)!.settings.aiBudgetUsd, 0);
   assert.equal(f.store.claimDailyScan(f.store.getSettings(), noon), null);
+});
+
+test('without overruns the daily total covers each category ceiling', async t => {
+  const f = fixture(t); f.store.saveSettings({ ...f.store.getSettings(), aiBudgetUsd: 3 });
+  f.service.configureDailyScans(true, before);
+  const budgets = Array.from({ length: 3 }, () => {
+    const claim = f.store.claimDailyScan(f.store.getSettings(), noon)!;
+    return [claim.attempt.category, claim.settings.aiBudgetUsd];
+  });
+  assert.deepEqual(budgets, [['laptop', .5], ['desktop', .25], ['gpu', .25]]);
+  assert.deepEqual(f.service.scheduleStatus(noon).perCategoryBudgetUsd, { laptop: .5, desktop: .25, gpu: .25 });
 });
 
 test('the actual scheduled AI client gets the capped budget while manual assessment gets its configured budget', async t => {
@@ -156,7 +168,7 @@ test('the actual scheduled AI client gets the capped budget while manual assessm
     limits.push(budget.limit); throw new Error('Fixture provider failure');
   });
   f.service.configureDailyScans(true, before); f.scanner.tick(noon); await complete(f.service);
-  assert.ok(limits.length > 0); assert.deepEqual([...new Set(limits)], [.25]);
+  assert.ok(limits.length > 0); assert.deepEqual([...new Set(limits)], [.5]);
   assert.match(f.store.dailyScanAttempts('2026-10-20')[0].aiIssue ?? '', /Fixture provider failure/);
   limits.length = 0; f.service.refresh('gpu', 'manual'); await complete(f.service);
   assert.ok(limits.length > 0); assert.deepEqual([...new Set(limits)], [2]);
@@ -203,7 +215,7 @@ test('a reported overage is durable before completion, so crash recovery reduces
   t.mock.method(f.store, 'getKey', () => 'fixture-only-key');
   t.mock.method(f.source, 'search', async () => ({ items: [raw('overage-before-crash', 4_000_000)], total: 1 }));
   t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({
-    id: 'fixture-overage', model: DECIDER_MODEL, usage: { input_tokens: 1, output_tokens: 0, cost: .6 },
+    id: 'fixture-overage', model: DECIDER_MODEL, usage: { input_tokens: 1, output_tokens: 0, cost: .9 },
   }), { headers: { 'content-type': 'application/json' } }));
   let release!: () => void, entered!: () => void;
   const waiting = new Promise<void>(resolve => { entered = resolve; });
@@ -214,12 +226,12 @@ test('a reported overage is durable before completion, so crash recovery reduces
     service.configureDailyScans(true, before); service.tryStartDailyRefresh(noon);
     await waiting;
     const recorded = f.store.dailyScanAttempts('2026-10-20')[0];
-    assert.equal(recorded.status, 'running'); assert.equal(recorded.job?.aiCostUsd, .6);
+    assert.equal(recorded.status, 'running'); assert.equal(recorded.job?.aiCostUsd, .9);
     const reopened = new Store(f.directory);
     try {
       reopened.interruptDailyScans(noon);
       const next = reopened.claimDailyScan(reopened.getSettings(), noon)!;
-      assert.equal(next.attempt.category, 'desktop'); assert.ok(Math.abs(next.settings.aiBudgetUsd - .15) < 1e-10);
+      assert.equal(next.attempt.category, 'desktop'); assert.ok(Math.abs(next.settings.aiBudgetUsd - .1) < 1e-10);
     } finally { reopened.close(); }
   } finally { release?.(); await service.shutdown(); }
 });

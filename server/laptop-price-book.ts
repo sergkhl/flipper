@@ -7,7 +7,8 @@ import { laptopReference, retailMatch } from './laptop-pricing.ts';
 import { LAPTOP_LAUNCH_PRICES } from './laptop-launch-prices.ts';
 
 export interface RetailSource { lookup(profile: HardwareProfile, signal?: AbortSignal): Promise<RetailLookup>; }
-const cacheKey = (p: HardwareProfile) => `prices:laptop:v1:${createHash('sha256').update(JSON.stringify([
+// v2: four shops, pre-orders skipped, template validity dates ignored and domestic VAT-inclusive prices credible.
+const cacheKey = (p: HardwareProfile) => `prices:laptop:v2:${createHash('sha256').update(JSON.stringify([
   p.model,p.modelYear,p.screenInches,p.cpu,p.cpuCores,p.gpu,p.gpuCores,p.gpuClass,p.vramGb,p.ramGb,p.ramType,p.storageGb,
 ])).digest('hex')}`;
 export class LaptopPriceBook {

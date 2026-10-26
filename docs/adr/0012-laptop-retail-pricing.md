@@ -6,10 +6,20 @@ and the 24-hour freshness requirement for Chợ Tốt observations remain in for
 The laptop reference policy is version 2.
 
 Compare a used laptop with the lowest verified, currently purchasable factory-new
-cash price for its exact configuration. Include known VAT and mandatory delivery
-to Vietnam. Do not deduct its age depreciation from a current new price again.
-Match model/generation, CPU, GPU/bin, RAM and storage; MacBooks also need family,
-screen and explicit CPU/GPU core counts. Known disagreements never match;
+cash price for its exact configuration. Current prices come from four reviewed
+Vietnamese shops: HACOM, An Phát, Phong Vũ and TNC. Each shop's listed prices
+include VAT according to its reviewed policy; a product page that explicitly
+excludes VAT makes that price indicative. Delivery is not part of a domestic
+comparison and is never added. Foreign prices still need known VAT and delivery
+to Vietnam. Pre-orders and back-orders are not current stock; display, activated,
+clearance and second-hand units are not factory-new; "contact us" placeholder
+amounts below VND 1,000,000 are not prices. The structured price must appear in
+the page's visible text. Shops publish template validity dates, so freshness
+comes from Flipper's own observation date and the seven-day cache.
+Do not deduct its age depreciation from a current new price again.
+Match model/generation, CPU, GPU/bin, RAM and storage; a shared manufacturer model
+code (such as ANV15-51 or 15ARP9) identifies a Windows model line across different
+wording. MacBooks also need family, screen and explicit CPU/GPU core counts. Known disagreements never match;
 incomplete identities can support an indicative range, without a deal badge.
 One direct credible price source supports medium confidence; a used-peer quorum
 is not required for laptop retail evidence.
@@ -17,7 +27,9 @@ is not required for laptop retail evidence.
 Only after a successful bounded current-price lookup finds no suitable new price,
 use original new retail evidence from the first 90 days after model release.
 Prefer Vietnamese launch retail; exact-configuration launch MSRP is an explicitly
-labeled fallback. Foreign prices lacking a known complete Vietnam purchase cost
+labeled fallback. Archived shop pages (Wayback Machine captures) within the 90-day
+window count as Vietnamese launch retail after review; later captures are not launch
+evidence, because their discounts would be depreciated a second time. Foreign prices lacking a known complete Vietnam purchase cost
 are indicative and do not displace local history. Source URLs, native amounts,
 currency, configuration, price date, release provenance and observation date stay
 with the evidence. TechAPI MSRP and verification flags are never accepted on

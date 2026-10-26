@@ -118,4 +118,28 @@ const pro7Plus: RetailPrice[] = [
     ramGb:row.ram,ramType:'LPDDR4X',storageGb:row.storage,storageType:'SSD',priceBasis:'item'},
 }));
 
-export const LAPTOP_LAUNCH_PRICES: RetailPrice[] = [...m1, ...m2, ...airM4, proM4, ...pro7, ...pro7Plus];
+// Archived Vietnamese shop pages within 90 days of release. Each capture's structured Offer is the
+// unconditional online price shown on the page; payment-method discounts and crossed-out list prices are excluded.
+const archive = (timestamp: string, page: string) => `https://web.archive.org/web/${timestamp}/${page}`;
+const nitroVPage = archive('20231208095841','https://hacom.vn/laptop-acer-gaming-nitro-anv15-51-55ca-nh.qn8sv.004-i5-13420h-16gb-ram-512gb-ssd-rtx4050-6g-15.6inch-fhd-win11-den');
+const nitroV: RetailPrice = {
+  ...historical, id:'hacom-nitro-v-anv15-51-55ca',
+  title:'Acer Nitro V 15 ANV15-51-55CA (NH.QN8SV.004), i5-13420H, RTX 4050 6 GB, 16 GB / 512 GB',
+  url:nitroVPage, source:'HACOM launch retail (Wayback Machine capture)', basis:'launch_retail', market:'VN', currency:'VND',
+  amount:26_999_000, priceDate:'2023-12-08', releaseDate:'2023-09-26', releaseYear:2023,
+  releaseSourceUrl:'https://news.acer.com/new-acer-nitro-v-15-laptop-makes-gaming-more-accessible', configurationSourceUrl:nitroVPage,
+  profile:{...EMPTY_PROFILE,model:'ACER NITRO V 15 ANV15-51',modelYear:2023,screenInches:15.6,cpu:'I5-13420H',
+    gpu:'RTX 4050',gpuClass:'mobile',vramGb:6,ramGb:16,storageGb:512,storageType:'SSD',priceBasis:'item'},
+};
+const airM4UpgradePage = archive('20250417152721','https://hacom.vn/laptop-apple-macbook-air-m4-mw133sa-a-apple-m4-10-core-cpu-10-core-gpu-16gb-ram-512gb-ssd-13.6-inch-mac-os-midnight');
+const airM4Upgrade: RetailPrice = {
+  ...historical, id:'hacom-air-m4-13-16-512',
+  title:'MacBook Air 13 M4 (2025) MW133SA/A, 16 GB / 512 GB, 10 CPU / 10 GPU',
+  url:airM4UpgradePage, source:'HACOM launch retail (Wayback Machine capture)', basis:'launch_retail', market:'VN', currency:'VND',
+  amount:31_999_000, priceDate:'2025-04-17', releaseDate:'2025-03-05', releaseYear:2025,
+  releaseSourceUrl:`https://www.apple.com/${airM4Path}`, configurationSourceUrl:airM4UpgradePage,
+  profile:{...EMPTY_PROFILE,model:'MACBOOK AIR 13',modelYear:2025,screenInches:13.6,cpu:'APPLE M4',cpuCores:10,
+    gpu:'APPLE M4',gpuClass:'integrated',gpuCores:10,ramGb:16,storageGb:512,storageType:'SSD',priceBasis:'item'},
+};
+
+export const LAPTOP_LAUNCH_PRICES: RetailPrice[] = [...m1, ...m2, ...airM4, airM4Upgrade, proM4, ...pro7, ...pro7Plus, nitroV];

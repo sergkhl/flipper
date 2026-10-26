@@ -13,8 +13,9 @@ and expose last/next-run status. First activation and resume wait for the strict
 next noon.
 
 SQLite atomically claims each (Vietnam schedule day, category) once, captures the
-current scan/memory settings and reserves up to USD 0.25 before work begins.
-Admitted scheduled allowances total at most USD 0.75 for a nominal schedule day,
+current scan/memory settings and reserves up to USD 0.50 for laptops or USD 0.25
+for desktops and graphics cards before work begins. Admitted scheduled allowances
+total at most USD 1.00 for a nominal schedule day,
 separate from manual settings. Keep full reservations across crashes; receipt
 absence cannot prove an interrupted request was free. Reported overages reduce
 later admission. External billing and cross-midnight execution are distinct from

@@ -119,3 +119,18 @@ test('compact SSD labels support exact MacBook comparisons and core quotes descr
   assert.equal(a.profile.storageType,'SSD');assert.equal(configurationsMatch('laptop',a.profile,a.profile),true);
   assert.equal(a.evidence.find(entry=>entry.field==='gpuCores')?.quote,'GPU 16 cores');
 });
+
+test('retail titles abbreviate Apple core counts without creating a second variant', () => {
+  const a = assessWithRules(laptop('MacBook Neo Apple A18 Pro/6C CPU/5C GPU/8GB RAM/512GB SSD/13.0"'));
+  assert.equal(a.profile.cpuCores, 6); assert.equal(a.profile.gpuCores, 5); assert.deepEqual(a.conflicts, []);
+});
+
+test('a re-parsed MacBook drops AI notes about the AI profile it replaced, but keeps condition doubts', () => {
+  const item = laptop('Macbook Pro 14inch M2 Pro 16GB/512GB', '10CPU/16GPU RAM16GB SSD512GB. Máy hoạt động tốt.');
+  const ai = { ...assessWithRules(item), method: 'ai' as const, eligibility: 'review' as const,
+    unknowns: ['gpu is not stated reliably.', 'gpuClass has no verifiable supporting quote.'], conflicts: ['Source parsing and AI disagree about cpu.'] };
+  const refreshed = enrichComputerAssessment(item, ai);
+  assert.equal(refreshed.eligibility, 'eligible'); assert.deepEqual([refreshed.unknowns, refreshed.conflicts], [[], []]);
+  const doubtful = enrichComputerAssessment(item, { ...ai, unknowns: [...ai.unknowns, 'Working used condition is not established confidently.'] });
+  assert.equal(doubtful.eligibility, 'review'); assert.deepEqual(doubtful.unknowns, ['Working used condition is not established confidently.']);
+});

@@ -5,8 +5,9 @@ import { activeCooldown } from './source-cooldown.ts';
 
 export const DAILY_SCAN_ZONE = 'Asia/Ho_Chi_Minh';
 export const DAILY_SCAN_CATEGORIES: readonly Category[] = ['laptop', 'desktop', 'gpu'];
-export const DAILY_SCAN_CATEGORY_BUDGET = 0.25;
-export const DAILY_SCAN_BUDGET = 0.75;
+// Laptops search every collected CPU for comparison laptops, so their daily allowance is larger.
+export const DAILY_SCAN_CATEGORY_BUDGETS: Readonly<Record<Category, number>> = { laptop: 0.5, desktop: 0.25, gpu: 0.25 };
+export const DAILY_SCAN_BUDGET = 1;
 const DAY_MS = 86_400_000;
 const dayFormatter = new Intl.DateTimeFormat('en-CA', {
   timeZone: DAILY_SCAN_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
@@ -41,7 +42,7 @@ export function dailyScanStatus(store: Store, active: RefreshJob | null, busy: b
     : eligible ? 'due' : 'scheduled';
   return {
     enabled: control.enabled, timeZone: DAILY_SCAN_ZONE, time: '12:00', categories: [...DAILY_SCAN_CATEGORIES],
-    perCategoryBudgetUsd: DAILY_SCAN_CATEGORY_BUDGET, dailyBudgetUsd: DAILY_SCAN_BUDGET,
+    perCategoryBudgetUsd: { ...DAILY_SCAN_CATEGORY_BUDGETS }, dailyBudgetUsd: DAILY_SCAN_BUDGET,
     nextRunAt: !control.enabled ? null : eligible ? new Date(vietnamNoon(now)).toISOString()
       : control.firstDueAt && Date.parse(control.firstDueAt) > now.getTime() ? control.firstDueAt : nextVietnamNoon(now),
     state, lastRunDay, attempts, cooldown, retries,

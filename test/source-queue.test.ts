@@ -158,7 +158,7 @@ test('a waiting automatic scan retains its scope and budget when defaults change
     assert.equal(store.dailyScanAttempts('2026-10-25').length, 0, 'changed scope does not absorb a new daily run');
     const resumedRun = store.getRun(resumed.id)!;
     assert.equal(resumedRun.parameters.minRamGb, 16);
-    assert.equal(resumedRun.parameters.aiBudgetUsd, .25);
+    assert.equal(resumedRun.parameters.aiBudgetUsd, .5);
     assert.equal(store.scanRetries().filter(item => item.category === 'laptop').length, 1);
     assert.equal(store.scanRetries()[0]!.spentUsd, .04);
     assert.equal(calls.filter(value => value.startsWith('laptop:')).length, 2);

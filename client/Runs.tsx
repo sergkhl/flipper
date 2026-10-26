@@ -154,7 +154,7 @@ export default function Runs({ settings, activity, onJob, onResults, onDefaultsS
           <label className="run-check"><input type="checkbox" checked={parameters.includeUnknownMemory} onChange={e => setParameters(p => ({ ...p, includeUnknownMemory: e.target.checked }))} />Include unknown memory</label>
           <label className="run-check"><input type="checkbox" checked={parameters.aiEnabled} onChange={e => setParameters(p => ({ ...p, aiEnabled: e.target.checked }))} />Use AI when configured</label>
           <p className="run-form-note">An empty search refreshes the category. Collection includes specification extraction and bounded nationwide comparisons. For one listing, use “Refresh this evidence” in its details.</p>
-          <p className="run-form-note">Save defaults to reuse these settings across visits and future manual and daily runs. Daily AI spending remains capped at $0.25 per category. Category and model search apply to this launch.</p>
+          <p className="run-form-note">Save defaults to reuse these settings across visits and future manual and daily runs. Daily AI spending remains capped at $0.50 for laptops and $0.25 for desktops and graphics cards. Category and model search apply to this launch.</p>
           <div className="run-actions">
             <button className="button primary" disabled={busy} type="submit"><Play size={15} />Start run</button>
             <button className="button" disabled={busy || !defaultsDirty} type="submit" name="save-defaults"><Save size={15} />Save defaults</button>

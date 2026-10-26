@@ -2,10 +2,10 @@ import * as sqlite from 'node:sqlite';
 import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { AI_ASSESSMENT_VERSION, DEFAULT_SETTINGS } from './config.ts';
+import { AI_ASSESSMENT_VERSION, DECIDER_OUTPUT_VERSION, DEFAULT_SETTINGS, EXTRACTION_OUTPUT_VERSION } from './config.ts';
 import { assessWithRules } from './hardware.ts';
 import type { AIReceipt, AppSettings, Assessment, Category, Coverage, DailyScanAttempt, DailyScanControl, ListingState, RawListing, ReferencePrice, RefreshJob, SavedSearch, ScanRetry, SourceCooldown } from '../shared/types.ts';
-import { DAILY_SCAN_BUDGET, DAILY_SCAN_CATEGORIES, DAILY_SCAN_CATEGORY_BUDGET, nextVietnamNoon, vietnamDay, vietnamNoon } from './scheduler.ts';
+import { DAILY_SCAN_BUDGET, DAILY_SCAN_CATEGORIES, DAILY_SCAN_CATEGORY_BUDGETS, nextVietnamNoon, vietnamDay, vietnamNoon } from './scheduler.ts';
 import { SOURCE_WINDOW_MS, SOURCE_INTERVAL_MS, SourceDeferredError, type SourceBudgetStatus } from './source-policy.ts';
 import type { RefreshProgress } from '../shared/types.ts';
 import { type StoredRun, validateRunLimits } from './runs.ts';
@@ -286,6 +286,16 @@ export class Store {
   cacheAssessment(raw: RawListing, assessment: Assessment): void {
     this.db.prepare('INSERT OR REPLACE INTO assessments(hash,json,at) VALUES(?,?,?)').run(`${AI_ASSESSMENT_VERSION}:${assessmentHash(raw)}`, JSON.stringify(assessment), new Date().toISOString());
   }
+  /** Paid model outputs, versioned by their prompts rather than by result handling. */
+  modelOutput<T>(model: 'decider' | 'extraction', raw: RawListing): T | null {
+    const version = model === 'decider' ? DECIDER_OUTPUT_VERSION : EXTRACTION_OUTPUT_VERSION;
+    const row = this.db.prepare('SELECT json FROM assessments WHERE hash=?').get(`${model}:${version}:${assessmentHash(raw)}`) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) : null;
+  }
+  saveModelOutput(model: 'decider' | 'extraction', raw: RawListing, value: unknown): void {
+    const version = model === 'decider' ? DECIDER_OUTPUT_VERSION : EXTRACTION_OUTPUT_VERSION;
+    this.db.prepare('INSERT OR REPLACE INTO assessments(hash,json,at) VALUES(?,?,?)').run(`${model}:${version}:${assessmentHash(raw)}`, JSON.stringify(value), new Date().toISOString());
+  }
   getPool(key: string, maxAgeMs: number): RawListing[] | null {
     const row = this.db.prepare('SELECT json,at FROM pools WHERE cache_key=?').get(key) as { json: string; at: string } | undefined;
     if (!row || Date.now() - Date.parse(row.at) >= maxAgeMs) return null;
@@ -493,7 +503,7 @@ export class Store {
     const day = vietnamDay(now);
     const accounted = (this.db.prepare('SELECT COALESCE(SUM(MAX(budget_usd,cost_usd)),0) AS total FROM daily_scan_attempts WHERE day=?')
       .get(day) as { total: number }).total;
-    const budgetUsd = Math.min(settings.aiBudgetUsd, DAILY_SCAN_CATEGORY_BUDGET, Math.max(0, DAILY_SCAN_BUDGET - accounted));
+    const budgetUsd = Math.min(settings.aiBudgetUsd, DAILY_SCAN_CATEGORY_BUDGETS[category], Math.max(0, DAILY_SCAN_BUDGET - accounted));
     const captured = { ...settings, aiBudgetUsd: budgetUsd };
     const attempt: DailyScanAttempt = { day, category, status: 'running', budgetUsd,
       startedAt: now.toISOString(), completedAt: null, job: null, aiIssue: null };

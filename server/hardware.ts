@@ -23,11 +23,13 @@ function uniqueMatches(text: string, regex: RegExp): string[] {
 
 export function gpuModels(text: string): string[] {
   const n = normalize(text);
-  const cards = uniqueMatches(n, /\b(?:rtx|gtx|gt|rx|mx)\s*[-]?\s*\d{3,4}m?(?:\s*(?:ti|super|xtx|xt))?\b/g)
-    .map((value) => value.replace(/(RTX|GTX|GT|RX|MX)\s*-?\s*(\d+)/, '$1 $2').replace(/\s*(TI|SUPER|XTX|XT)$/, ' $1'));
-  const quadro = uniqueMatches(n, /\b(?:quadro\s*)?(?:[pkm]\d{3,4}|t(?:400|600|1000)|a(?:2000|4000|5000|6000))\b/g)
-    .filter((value) => !/^M[1-5]$/.test(value)).map((value) => `QUADRO ${value.replace(/^QUADRO\s*/, '')}`);
-  const arc = uniqueMatches(n, /\barc\s*[ab]\d{3}\b/g);
+  const cards = uniqueMatches(n, /\b(?:rtx|gtx|gt|rx|mx)\s*[-]?\s*\d{3,4}m?(?:\s*(?:ti|super|xtx|xt|ada))?\b/g)
+    .map((value) => value.replace(/(RTX|GTX|GT|RX|MX)\s*-?\s*(\d+)/, '$1 $2').replace(/\s*(TI|SUPER|XTX|XT|ADA)$/, ' $1'));
+  // Laptop workstation parts are often written without a Quadro prefix (T1200, RTX A2000).
+  // T500/T550 and the smaller A-series names need GPU context: ThinkPad T550 is a laptop model.
+  const quadro = [...n.matchAll(/\b(?:(?:quadro|nvidia|rtx)\s*)*([pkm]\d{3,4}|t(?:400|600|1000|1200|2000)|a(?:2000|4000|5000|6000))\b|\b(?:quadro|nvidia|rtx)\s*(t(?:500|550)|a(?:500|1000|3000))\b/g)]
+    .map((match) => (match[1] ?? match[2])!.toUpperCase()).filter((value) => !/^M[1-5]$/.test(value)).map((value) => `QUADRO ${value}`);
+  const arc = uniqueMatches(n, /\barc\s*[ab]\d{3}m?\b/g);
   return [...new Set([...cards, ...quadro, ...arc])];
 }
 
@@ -35,8 +37,18 @@ export function cpuModels(text: string): string[] {
   const n = normalize(text);
   const intel = uniqueMatches(n, /\bi[3579]\s*[- ]?\s*\d{4,5}(?:g[147]|[a-z]{0,3})\b/g)
     .map((value) => value.replace(/(I[3579])\s*[- ]?\s*/, '$1-'));
-  const amd = uniqueMatches(n, /\bryzen\s*[3579]\s*[- ]?\s*\d{4}[a-z]{0,3}\b/g)
-    .map((value) => value.replace(/^RYZEN\s*([3579])\s*[- ]?\s*(\d{4}[A-Z]{0,3})$/, 'RYZEN $1 $2'));
+  // Intel's 2023+ names: Core Ultra 7 155H, Core Ultra 5 226V and Core 5 210H.
+  const core = [...n.matchAll(/\b(?:intel\s*)?core\s*(ultra\s*)?([3579])\s*[- ]?\s*(\d{3}[a-z]{0,2})\b(?!\s*(?:gb|g|tb|mhz|hz|w)\b)/g)]
+    .map(([, ultra, tier, sku]) => `CORE ${ultra ? 'ULTRA ' : ''}${tier} ${sku!.toUpperCase()}`);
+  // "R7-4800H" is common seller shorthand; a suffix keeps it distinct from model codes such as Legion R7000.
+  const amd = [...n.matchAll(/\b(?:ryzen\s*([3579])\s*[- ]?\s*(pro\s*)?|r([3579])\s*[- ]?\s*)(\d{4})([a-z]{0,3})\b/g)]
+    .filter(([, tier, , shortTier, , suffix]) => tier !== undefined || /^(?:h[sx]?|u)$/.test(suffix!))
+    .map(([, tier, pro, shortTier, number, suffix]) => `RYZEN ${tier ?? shortTier} ${pro ? 'PRO ' : ''}${number}${suffix!.toUpperCase()}`);
+  // Ryzen AI 9 HX 370 and the 2025 three-digit names such as Ryzen 7 260 or Ryzen 7 H 255.
+  const ryzenAi = [...n.matchAll(/\bryzen\s*ai\s*([3579])\s*(hx\s*)?(\d{3})\b/g)]
+    .map(([, tier, hx, number]) => `RYZEN AI ${tier} ${hx ? 'HX ' : ''}${number}`);
+  const ryzenThreeDigit = [...n.matchAll(/\bryzen\s*([3579])\s*(h\s*)?(\d{3})\b(?!\s*(?:gb|g|tb|mhz|hz|w)\b)/g)]
+    .map(([, tier, h, number]) => `RYZEN ${tier} ${h ? 'H ' : ''}${number}`);
   const xeon = uniqueMatches(n, /\b(?:xeon\s*)?e[357]\s*[- ]?\s*\d{4}[a-z]{0,2}(?:\s*[- ]?\s*v[1-6])?\b/g)
     .map((value) => value.replace(/^(?:XEON\s*)?(E[357])\s*[- ]?\s*(\d{4}[A-Z]{0,2}?)(?:\s*[- ]?\s*V([1-6]))?$/, (_all, family: string, model: string, version: string | undefined) => `XEON ${family}-${model}${version ? ` V${version}` : ''}`));
   const appleText = n.replace(/\b(?:ssd|nvme|o cung)\s*m\.?2\b/g, 'storage-interface');
@@ -45,7 +57,7 @@ export function cpuModels(text: string): string[] {
     .map((value) => value.replace(/^APPLE\s*/, '').replace(/^(M[1-9]|A\d{2})\s*(PRO|MAX|ULTRA)$/, '$1 $2'))
     .map((value) => `APPLE ${value}`)
     : [];
-  return [...new Set([...intel, ...amd, ...xeon, ...apple])];
+  return [...new Set([...intel, ...core, ...amd, ...ryzenAi, ...ryzenThreeDigit, ...xeon, ...apple])];
 }
 
 function capacity(text: string, prefix: RegExp): { value: number; quote: string } | null {
@@ -130,6 +142,36 @@ function modelFromText(raw: RawListing, n: string): string | null {
   return null;
 }
 
+/** Current retail product lines. Seller-text parsing keeps its narrower patterns, so its model claims do not change. */
+export function retailLaptopModel(text: string): string | null {
+  // Shops separate the family from the code in several ways ("Nitro V 15 - ANV15-41").
+  const n = normalize(text).replace(/\s+-\s+/g, ' ');
+  const patterns = [
+    /\b(?:dell\s*)?alienware\s*(?:[mx]\s*)?\d{2}(?:\s*r\d+)?(?:\s*aurora)?(?:\s*[a-z]{2}\d{5})?\b/,
+    /\bdell\s*(?:pro\s*)?1[3-6](?:\s*(?:plus|premium|max))?\s*[a-z]{2}\d{5}\b/,
+    /\bdell\s*g\s?1[56]\s*\d{4}\b/,
+    /\b(?:lenovo\s*)?(?:legion|ideapad|yoga|thinkbook)(?:\s*(?:slim|pro|gaming|flex|book))*\s*\d{1,2}i?\s*(?:gen\s*\d+\s*)?\d{2}[a-z]{3}\d{1,2}[a-z]?\b/,
+    /\b(?:lenovo\s*)?legion\s*[ry]\d{4}[a-z]?\b/,
+    /\b(?:lenovo\s*)?loq\s*\d{2}[a-z]{3}\d{1,2}[a-z]?\b/,
+    /\b(?:lenovo\s*)?xiaoxin\s*(?:pro|air)?\s*\d{2}(?:\s*[a-z]{3}\d{1,2})?\b/,
+    /\b(?:hp\s*)?(?:victus|omen|pavilion|envy|spectre)(?:\s*x360)?\s*\d{2}(?:[- ][a-z]{1,2}\d{3,4}[a-z]{0,2})?\b/,
+    /\b(?:hp\s*)?omni(?:book)?\s*(?:ultra\s*|x\s*)?\d(?:\s*(?:ai|flip))?(?:\s*\d{2})?(?:[- ][a-z]{2}\d{4}[a-z]{2})?\b/,
+    /\b(?:hp\s*)?(?:elitebook|probook)(?:\s*x360)?\s*\d{1,4}\s*g\d+i?\b/,
+    /\b(?:hp\s*)?zbook\s*(?:power|firefly|studio|fury|create|ultra)?\s*(?:\d{2}\s*)?g\d+\b/,
+    /\bhp\s*(?:14|15|240|245|250|255)(?:\s*g\d+|[- ]?[a-z]{2}\d{4}[a-z]{2})\b/,
+    /\b(?:asus\s*)?(?:vivobook|zenbook|tuf|rog|expertbook|proart)(?:\s*(?:s|pro|go|flip|duo|gaming|strix|scar|zephyrus|flow|oled|ultra|[a-z]\d{1,2}|\d{2}x?))*\s*[a-z]{1,3}\d{3,4}[a-z0-9]*\b/,
+    /\b(?:acer\s*)?(?:nitro|aspire|swift|predator|travelmate|extensa)(?:\s*(?:v|lite|go|x|neo|helios|triton|propanel|ai|\d{1,2}))*\s*[a-z]{1,4}\d{1,3}[a-z]?(?:[- ]\d{2,3}[a-z]?)?\b/,
+    /\b(?:msi\s*)?(?:katana|cyborg|sword|bravo|pulse|crosshair|stealth|raider|titan|vector|thin|modern|prestige|summit|venture|creator|g[flsep]\d{2})(?:\s*(?:thin|ai|studio|max|\d{2}))*(?:\s*[a-z]?\d{1,2}[a-z]{1,4}\d?)?\b/,
+    /\b(?:lg\s*)?(?:gram\s*)?\d{2}z\d{2,3}[a-z]?\b/,
+    /\b(?:microsoft\s*)?surface\s*(?:laptop(?:\s*(?:go|studio|se))?|pro|book|go)(?:\s*(?:\d{1,2}\+?|x))?/,
+  ];
+  for (const pattern of patterns) {
+    const match = n.match(pattern);
+    if (match) return match[0].toUpperCase().replace(/\s+/g, ' ').trim();
+  }
+  return null;
+}
+
 export function assessWithRules(raw: RawListing): Assessment {
   const text = listingText(raw);
   const n = foldedLines(text);
@@ -147,7 +189,10 @@ export function assessWithRules(raw: RawListing): Assessment {
     || /\b(?:e?gpu box|vo egpu|dock egpu)\b/.test(title))) kind = 'other';
   const gpus = gpuModels(text);
   const cpus = cpuModels(text);
-  const ramClaims = ramCapacities(n);
+  // Upgrade limits ("hỗ trợ tối đa 32GB", "up to 2TB") describe the platform, not the installed parts.
+  // "Đã nâng cấp lên 16GB" states installed memory, and M1 Max 32GB states an Apple chip tier.
+  const installed = n.replace(/\b(?:toi da|up to|len den|co the nang cap(?:[^\S\n]+(?:ram|ssd|o cung|bo nho))?(?:[^\S\n]+len)?)[^\S\n]*[:=]?[^\S\n]*\d{1,4}[^\S\n]*(?:gb|g|tb|t)\b/g, 'upgrade-limit');
+  const ramClaims = ramCapacities(installed);
   const statedRamCapacities = new Set(ramClaims.map((claim) => claim.value));
   for (const [key, value] of Object.entries(raw.params)) {
     if (/pc_ram|dung luong ram/.test(normalize(key))) {
@@ -183,8 +228,8 @@ export function assessWithRules(raw: RawListing): Assessment {
     }
     if (capacities.size === 1) profile.vramGb = [...capacities][0]!;
     else if (capacities.size > 1) conflicts.push('Title, description or parameters disagree about video-memory capacity');
-  } else if ((kind === 'laptop' || kind === 'desktop') && /\b(?:intel\s*(?:uhd|hd|iris)(?:\s*(?:xe|graphics|\d{3,4}))*|radeon\s*(?:vega|graphics)|integrated|onboard|tich hop)\b/.test(n)) {
-    const integrated = n.match(/\b(?:intel\s*(?:uhd|hd|iris(?:\s*xe)?)(?:\s*graphics)?(?:\s*\d{3,4})?|radeon\s*(?:vega(?:\s*\d+)?|graphics))\b/);
+  } else if ((kind === 'laptop' || kind === 'desktop') && /\b(?:intel\s*(?:uhd|hd|iris)(?:\s*(?:xe|graphics|\d{3,4}))*|intel\s*arc\s*graphics|radeon\s*(?:vega|graphics|\d{3}m)|integrated|onboard|tich hop)\b/.test(n)) {
+    const integrated = n.match(/\b(?:intel\s*(?:uhd|hd|iris(?:\s*xe)?)(?:\s*graphics)?(?:\s*\d{3,4})?|intel\s*arc\s*graphics|radeon\s*(?:vega(?:\s*\d+)?|graphics|\d{3}m))\b/);
     profile.gpu = integrated?.[0].toUpperCase() ?? 'INTEGRATED';
     profile.gpuClass = 'integrated';
   } else if (kind === 'laptop' && profile.cpu?.startsWith('APPLE') && mac) {
@@ -206,7 +251,7 @@ export function assessWithRules(raw: RawListing): Assessment {
   // Vietnamese warranty durations such as "BH 12T" are months, not terabytes.
   // Mask those claims for both prefix and suffix capacity matching, and keep model
   // descriptions from crossing into a warranty clause while looking for capacity.
-  const storageText = n.replace(/\b(?:bh|bao hanh|warranty)[^\S\n]*[:=-]?[^\S\n]*\d{1,3}[^\S\n]*(?:t|thang|months?)\b/g, 'warranty');
+  const storageText = installed.replace(/\b(?:bh|bao hanh|warranty)[^\S\n]*[:=-]?[^\S\n]*\d{1,3}[^\S\n]*(?:t|thang|months?)\b/g, 'warranty');
   const storagePrefix = /\b(?:ssd|hdd|nvme|o cung|storage)(?:[^\S\n]+(?:ssd|nvme|sata|m\.?2))*[^\S\n]*[: =-]?[^\S\n]*(\d{1,4})[^\S\n]*(tb|t|gb|g)\b/;
   const storageModelPrefix = /\b(?:ssd|hdd|nvme|o cung|storage)\b(?:(?!\b(?:ram|memory|bo nho ram|cpu|vga|gpu|ddr[345]|bh|bao hanh|warranty)(?=\b|\d))[^\n,;]){0,80}?\b(\d{1,4})[^\S\n]*(tb|t|gb|g)\b/;
   const storageSuffix = /\b(\d{1,4})[^\S\n]*(tb|t|gb|g)[^\S\n]*(?:ssd|hdd|nvme)\b/;

@@ -48,7 +48,7 @@ export default function DailyScans({ initial, activity }: { initial: DailyScanSt
         {saving && <LoaderCircle size={15} className="spin" />}{schedule.enabled ? 'Pause daily scans' : 'Enable daily scans'}
       </button>
     </div>
-    <p className="section-caption">AI request budgets: {usd(schedule.perCategoryBudgetUsd)} per category, up to {usd(schedule.dailyBudgetUsd)} per scheduled day.
+    <p className="section-caption">AI request budgets: laptops {usd(schedule.perCategoryBudgetUsd.laptop)}, desktops {usd(schedule.perCategoryBudgetUsd.desktop)} and graphics cards {usd(schedule.perCategoryBudgetUsd.gpu)}, up to {usd(schedule.dailyBudgetUsd)} per scheduled day.
       Manual scans have a separate budget. Enabling starts at the next noon. Pausing lets the current category finish.</p>
     {schedule.cooldown && <p className="section-caption" role="status">Chợ Tốt requests resume no earlier than <strong>{vietnamTime(schedule.cooldown.until)}</strong>.
       Daily work waits without consuming an attempt. The noon schedule stays in place.</p>}

@@ -18,7 +18,8 @@ Decisions settled on 20 October 2026:
 - The hosted application owns scheduling and persists execution state in SQLite.
   Other installations default to disabled. Private administrators can enable or
   pause scanning and inspect last/next-run status and category outcomes.
-- Scheduled AI request allowances are USD 0.25/category and USD 0.75 per nominal
+- Scheduled AI request allowances are USD 0.50 for laptops, USD 0.25 each for
+  desktops and GPUs, and USD 1.00 per nominal
   Vietnam schedule day, separate from manual budgets. Missing/unavailable AI or
   exhausted budgets retain conservative processing with explicit status.
 - Wait for active manual work, provider probes and deployment maintenance.

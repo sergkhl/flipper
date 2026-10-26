@@ -143,7 +143,11 @@ test('Surface commercial launch prices retain Wi-Fi/LTE ranges and foreign estim
 test('new MacBook launch prices apply only to documented configurations and current retail still wins', () => {
   const base = LAPTOP_LAUNCH_PRICES.find(o => o.id === 'apple-vn-air-m4-13-16-256')!;
   assert.equal(result(lookup(),LAPTOP_LAUNCH_PRICES,base.profile).reference?.retail?.indicative,false);
-  assert.equal(result(lookup(),LAPTOP_LAUNCH_PRICES,{...base.profile,storageGb:512,gpuCores:10}).reference,null);
+  // The upgraded SKU has its own archived launch price, never the base price.
+  const upgraded = result(lookup(),LAPTOP_LAUNCH_PRICES,{...base.profile,storageGb:512,gpuCores:10}).reference!;
+  assert.equal(upgraded.retail?.originalVnd,31_999_000);
+  assert.deepEqual(upgraded.retail?.sources.map(source => source.id),['hacom-air-m4-13-16-512']);
+  assert.equal(result(lookup(),LAPTOP_LAUNCH_PRICES,{...base.profile,ramGb:24,storageGb:512,gpuCores:10}).reference,null);
   const m2 = LAPTOP_LAUNCH_PRICES.find(o => o.id === 'fpt-air-m2-8-256')!;
   assert.equal(m2.releaseDate,'2022-07-08','age starts at first orders, not the June announcement');
   assert.equal(result(lookup(),LAPTOP_LAUNCH_PRICES,{...m2.profile,ramGb:16}).reference,null);
@@ -189,4 +193,14 @@ test('VND formatting works without FX and AI spending retains its native USD for
   assert.equal(money(null),'—'); assert.equal(money(NaN),'—'); assert.equal(money(0),'₫0');
   assert.equal(compactMoney(20_000_000),'₫20M'); assert.equal(originalMoney(900,'EUR'),'€900.00');
   assert.equal(usd(.25),'$0.25');
+});
+
+test('Windows retail models match by manufacturer code across family wording, never by processor or generation alone', () => {
+  const listing = {...EMPTY_PROFILE,model:'Acer Nitro V 15 ANV15-51',cpu:'I5-13420H',gpu:'RTX 4050',gpuClass:'mobile' as const,
+    vramGb:6,ramGb:16,storageGb:512,storageType:'SSD',priceBasis:'item' as const};
+  assert.equal(retailMatch(listing,{...listing,model:'NITRO V ANV15-51'}),'exact');
+  assert.equal(retailMatch(listing,{...listing,model:'Nitro 5 AN515-58'}),'different');
+  assert.equal(retailMatch({...listing,model:'Dell Latitude 5420 i5-1145G7'},{...listing,model:'Dell Latitude 3420 i5-1145G7'}),'different');
+  assert.equal(retailMatch({...listing,model:'Lenovo LOQ 15ARP9'},{...listing,model:'LOQ 15ARP10'}),'different');
+  assert.equal(retailMatch(listing,{...listing,model:'NITRO V ANV15-51',cpu:'I7-13620H'}),'different');
 });
