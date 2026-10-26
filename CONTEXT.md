@@ -7,7 +7,10 @@ interface as of 14 October 2026; legacy stored fields remain compatible. Phones
 are excluded from the current version. Chợ Tốt is the initial
 marketplace and Da Nang is the initial buying location. Reference comparisons
 use new retail/original launch evidence for laptops and nationwide used offers
-for GPUs and desktops. Display prices in USD using a current cached FX snapshot.
+for GPUs and desktops. Prices and price budgets use VND. Convert only foreign
+reference evidence using current rates cached for seven days; failed rate
+refreshes retain stale indicative estimates without deal badges. Native VND
+valuations do not depend on exchange rates. AI costs remain in USD.
 The app supports category browsing, model searches, saved searches, and manual
 refresh, with LiteLLM-assisted classification and interpretation. Chat uses the
 exact gateway route `xiaomi_mimo/mimo-v2.6-flash`; the dedicated OpenRouter

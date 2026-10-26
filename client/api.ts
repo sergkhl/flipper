@@ -1,5 +1,3 @@
-import { setExchangeRates } from './format';
-import type { FxSnapshot } from '../shared/retail';
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
@@ -45,7 +43,6 @@ export async function request<T>(
       const error = data as { error?: string };
       throw new ApiError(error.error || `Request failed (${response.status}).`, response.status);
     }
-    if (data && typeof data === 'object' && 'fx' in data) setExchangeRates((data as {fx:FxSnapshot|null}).fx);
     return data as T;
   } catch (error) {
     if (timeout?.aborted && !init.signal?.aborted)

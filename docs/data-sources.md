@@ -27,7 +27,7 @@ refine matching. A changed interpretation invalidates affected price references.
 No downloaded catalog, marketplace database or listing photograph is distributed
 with this source repository. See `NOTICE.md` for third-party notices.
 
-## Laptop prices and currency conversion
+## Laptop prices and foreign currency conversion
 
 The implemented free sources are:
 
@@ -35,7 +35,7 @@ The implemented free sources are:
 | --- | --- | --- |
 | [HACOM catalog](https://hacom.vn/sitemap.xml) and product pages | Discover matching laptops, then read JSON-LD Product/Offer data | Require a factory-new, in-stock cash offer, exact configuration, VAT and known Vietnam shipping cost. Sitemap coverage and a twelve-product bound limit the checked universe. |
 | [An Phát](https://www.anphatpc.com.vn/) public search and product pages | A second retail lookup | Ignore script templates; reject expired prices and unknown stock/cost evidence. A failed or truncated search cannot establish absence. |
-| [Frankfurter v2](https://frankfurter.dev/) | Current USD-base exchange rates, including VND | No API key. Preserve rate date and fetch date; unsupported/stale currency rows are rejected. |
+| [Frankfurter v2](https://frankfurter.dev/) | Current rates for converting foreign reference prices into VND | No API key. Preserve rate date and fetch date; reject unsupported or already-stale provider rows when fetching. Retain previously verified snapshots for stale indicative estimates if refresh fails. |
 | [FPT M1 launch retail report](https://fptshop.com.vn/tin-tuc/tin-khuyen-mai/fpt-shop-ve-day-ke-macbook-m1-mua-ngay-khong-can-cho-doi-130379) | Reviewed original Vietnamese prices | Air/Pro 13-inch M1, 8 GB RAM, 256/512 GB storage. Prices offered on 8 January 2021, within 90 days of release. |
 | [Apple release announcement](https://www.apple.com/newsroom/2020/11/introducing-the-next-generation-of-mac/) and [dated configuration list](https://www.apple.com/education/pricelists/pdfs/Apple_US_Education_Institution_Price_List-11-10-2020.pdf) | Release/order date and original base configurations | The education list supplies specifications only; its restricted education prices are not retail evidence. |
 | [FPT M2 launch retail report](https://fptshop.com.vn/tin-tuc/tin-khuyen-mai/fpt-shop-lai-bat-ngo-mo-ban-macbook-air-m2-chinh-hang-som-nhat-viet-nam-148204) and [configuration description](https://fptshop.com.vn/tin-tuc/danh-gia/danh-gia-macbook-air-m2-2022-146863/) | Air 13 M2, 8/256 GB with 8 GPU cores and 8/512 GB with 10 GPU cores | Unconditional listed prices on 28 July 2022: VND 32,990,000 and 39,990,000. Do not deduct conditional payment/student promotions or use these amounts for 16 GB upgrades. |
@@ -81,6 +81,9 @@ Current prices, discovery indexes/searches and FX cache for seven days in SQLite
 times survive lookup reuse. Requests stay on allowlisted HTTPS hosts, with a
 12-second deadline, bounded bodies and three shared slots. Cache warming is
 separate from Chợ Tốt request allowances. Reads never call external sources.
+Only matching foreign evidence warms exchange rates; native VND prices have no
+FX dependency. Foreign references are recalculated when rates refresh. Expired
+snapshots remain available for explicitly stale estimates without deal badges.
 The lowest **verified** price means the lowest eligible offer in checked sources,
 not a claim to exhaustive market coverage. See ADR 0012 for fallback/FX policy.
 

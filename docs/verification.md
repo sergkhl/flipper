@@ -36,11 +36,31 @@ Cache tests cover seven-day reuse and restart persistence, expiry, failure
 backoff, provider-date validation, price observation dates, stock/shipping/tax
 evidence, stale structured prices, redirect allowlists and bounded responses.
 Service tests prove laptop collection makes no nationwide used-peer queries,
-USD filtering preserves stored native amounts, offline reads issue no provider
+VND filtering preserves exact native amounts, offline reads issue no provider
 requests, and price-cache maintenance drains during shutdown and excludes release.
+Native VND retail, depreciation and GPU deals remain usable without FX. Foreign
+references recalculate after successful rate refreshes; failed refreshes retain
+stale estimates across restarts without deal badges. API tests exercise inclusive
+VND budgets on both public and administrator routes, reject explicit non-VND
+filters, and round-trip saved budgets without currency tags. Formatting tests
+separate VND listing prices from native USD AI costs.
 Indicative laptop estimates that require configuration review remain discoverable
 in both the review and indicative views, without a deal badge or promotion into
 working items. Memory filters and private dismissal still apply.
+
+VND pricing validation on 26 October 2026: all 378 application tests, all 10
+release-policy tests, TypeScript checking and the Vite production build passed
+with Node 26.12.0. Synthetic browser checks at 1440×1080 and 390×844 verified
+VND asking/reference prices, exact maximum-price filtering, saved-budget
+round trips, retained native-price deal badges during an FX outage, and visibly
+stale foreign estimates without deal badges. Both sizes had no page errors or
+horizontal overflow, including the evidence drawer. These checks used an isolated
+database and synthetic sources, with no external requests.
+
+The twenty-case price benchmark also replayed entirely offline. The retained
+snapshot produced six indicative references. Removing FX kept four native VND
+references; expiring the verified snapshot kept all six, with exactly two marked
+as stale foreign estimates. These replays made zero provider requests.
 
 Separate live checks on 25 October 2026 verified USD/VND lookup, a purchasable
 HACOM configuration, and historical fallback after a successful M1 absence check.
@@ -48,22 +68,12 @@ Expired An Phát offers and bounded/truncated lookups remained explicit failures
 This is evidence for the sampled providers/configurations, not full market or
 historical-model coverage. See `docs/data-sources.md` for the source limitations.
 
-Retail validation on 25 October 2026: all 369 application tests and all 10
-release-policy tests passed in Node 26, with TypeScript checking and the Vite
-production build passing. Synthetic browser checks at 1440×1080 and 390×844
-verified current-retail and historical badges, USD prices and budget filters,
-native-price provenance, source details, and the strict below-reference rule.
-Both sizes had no page errors or horizontal overflow. These browser checks
-used an isolated database and synthetic sources, with no external requests.
-
-Launch-price coverage validation on 25 October 2026: all 374 application tests,
-all 10 release-policy tests and the Node 26 TypeScript/Vite production build
-passed. Scripts are included in TypeScript checking. New cases guard Surface
+Launch-price cases guard Surface
 Pro 7 versus 7+, explicit Intel SKU aliases, contradictory CPU generations,
 RAM/storage/GPU conflicts, reviewed launch dates and source links, exclusion of
 restricted education prices, foreign Wi-Fi/LTE ranges without deal badges, and
 rejection of unsupported upgraded MacBook configurations. Current-retail
-precedence and seven-day cache tests continue to pass.
+precedence and seven-day cache tests are included in the application suite.
 
 The separate [live coverage benchmark](laptop-price-benchmark.md) exercised twenty
 configuration-only cases through the production retail adapters, reusing valid

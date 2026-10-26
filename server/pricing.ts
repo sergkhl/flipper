@@ -485,20 +485,21 @@ export function valueListing(raw: RawListing, assessment: Assessment, reference:
     opportunity: false, componentOpportunity: false, resaleOpportunity: false, confidence: 'low', reason, costReserve, expectedResale: null, maxBuyPrice: null,
     evidenceIssue: /^Only \d+ independent/.test(reason) ? 'insufficient_offers'
       : /Hardware interpretation changed/.test(reason) ? 'outdated_policy'
-      : /No reliable model/.test(reason) ? 'configuration' : 'not_compared',
+      : /No reliable model/.test(reason) ? 'configuration'
+      : /No usable exchange rate/.test(reason) ? 'exchange_rate' : 'not_compared',
     ...(missing.length ? { missingDetails: missing } : {}) };
   if (sourceUnavailable(raw)) return { ...empty, status: 'needs_review', evidenceIssue: 'unavailable', reason: 'The original listing is no longer available; its last observed price is retained in history' };
   if (assessment.eligibility === 'excluded') return { ...empty, status: 'excluded', reason: assessment.risks.join('; ') || 'Excluded from working used items' };
   if (!raw.sellerId) return { ...empty, status:'needs_review', evidenceIssue:'configuration', reason:'Seller identity is missing; verify this listing before using a price verdict.' };
   if (assessment.kind === 'laptop') {
     const retail = reference?.retail;
-    if (!retail || retail.policyVersion !== LAPTOP_PRICE_POLICY) return { ...empty, evidenceIssue: 'retail_price',
+    if (!retail || retail.policyVersion !== LAPTOP_PRICE_POLICY) return { ...empty,
+      evidenceIssue: empty.evidenceIssue === 'exchange_rate' ? 'exchange_rate' : 'retail_price',
       reason: reference ? 'Analyze this laptop to replace its old used-market comparison with retail price evidence.' : reason };
-    if (!validFx(retail.fx)) return { ...empty, evidenceIssue:'exchange_rate', reason:'The USD exchange-rate snapshot has expired; refresh before comparing prices.' };
-    const askingUsd = raw.price/retail.fx.rates.VND;
-    const discountPercent = (retail.referenceUsd-askingUsd)/retail.referenceUsd*100;
+    const discountPercent = (retail.referenceVnd-raw.price)/retail.referenceVnd*100;
     const indicative = (reason: string, evidenceIssue?: Valuation['evidenceIssue']): Valuation => ({ ...empty, status:'indicative', reference,
       reason, evidenceIssue, discountPercent:Number.isFinite(raw.price) && raw.price > 0 ? discountPercent : null });
+    if (retail.fx && (retail.fxStale || !validFx(retail.fx))) return indicative('The exchange rate is stale; this foreign-price estimate cannot support a deal verdict.','exchange_rate');
     if (retail.indicative || assessment.eligibility !== 'eligible' || assessment.conflicts.length || !Number.isFinite(raw.price) || raw.price <= 0) {
       return indicative([...retail.reasons,...assessment.conflicts,...assessment.unknowns].join(' ') || 'Configuration needs review','configuration');
     }
@@ -509,7 +510,7 @@ export function valueListing(raw: RawListing, assessment: Assessment, reference:
       return indicative('Refresh the seven-day retail evidence before using a verdict.','stale_reference');
     }
     if (raw.price < reference.average*.1) return indicative('Verify the full cash asking price; it is below 10% of the supported reference.','unverified_price');
-    return { ...empty, status:'valued', reference, discountPercent, opportunity:askingUsd < retail.referenceUsd,
+    return { ...empty, status:'valued', reference, discountPercent, opportunity:raw.price < retail.referenceVnd,
       confidence:'medium', evidenceIssue:undefined, maxBuyPrice:reference.average,
       reason:`${retail.basis === 'current_new' ? 'Compared with new retail' : 'Compared with a depreciation estimate'}. Working-used condition assumed; battery health and wear are unverified.` };
   }

@@ -54,7 +54,6 @@ import {
   safeSourceUrl,
   timeAgo,
   usd,
-  vndToUsd,
 } from "./format";
 import ListingDrawer from "./ListingDrawer";
 import SettingsDrawer from "./SettingsDrawer";
@@ -177,7 +176,7 @@ export default function App() {
       includeUnknownMemory: String(includeUnknownMemory),
       sort,
     });
-    if (maxPrice && Number(maxPrice) > 0) { params.set("maxPrice", maxPrice); params.set('priceCurrency','USD'); }
+    if (maxPrice && Number(maxPrice) > 0) params.set("maxPrice", maxPrice);
     if (category !== "gpu") params.set("minRamGb", String(minRamGb));
     setLoading(true);
     void request<ListingsResponse>(`/listings?${params}`, {
@@ -367,14 +366,12 @@ export default function App() {
   };
   const useSearch = (search: SavedSearch) => {
     if (!canManage) return;
-    const restoredPrice = search.maxPrice ? search.priceCurrency === 'USD' ? search.maxPrice : vndToUsd(search.maxPrice) : null;
-    if (search.maxPrice && restoredPrice === null) { setToast({text:'Wait for a current exchange rate before opening this saved VND price filter.'}); return; }
     setRunsOpen(false);
     setCategory(search.category);
     setQuery(search.query);
     setQueryInput(search.query);
     setDistrict(search.district);
-    setMaxPrice(restoredPrice ? String(Number(restoredPrice.toFixed(2))) : "");
+    setMaxPrice(search.maxPrice ? String(search.maxPrice) : "");
     setMinRamGb(search.minRamGb ?? bootstrap?.settings.minRamGb ?? 16);
     setMinVramGb(search.minVramGb ?? bootstrap?.settings.minVramGb ?? 8);
     setIncludeUnknownMemory(search.includeUnknownMemory ?? bootstrap?.settings.includeUnknownMemory ?? true);
@@ -396,7 +393,6 @@ export default function App() {
         district,
         mode: "buy",
         maxPrice: maxPrice && Number(maxPrice) > 0 ? Number(maxPrice) : null,
-        priceCurrency: 'USD',
         minRamGb,
         minVramGb,
         includeUnknownMemory,
@@ -860,15 +856,15 @@ export default function App() {
                 <ChevronDown size={14} />
               </label>
               <label className="price-filter">
-                <span>Max $</span>
+                <span>Max ₫</span>
                 <input
                   type="number"
                   min="0"
-                  step="0.01"
+                  step="1"
                   placeholder="Any price"
                   value={maxPrice}
                   onChange={(event) => setMaxPrice(event.target.value)}
-                  aria-label="Maximum asking price in USD"
+                  aria-label="Maximum asking price in VND"
                 />
               </label>
               {canManage && <button
@@ -1031,9 +1027,7 @@ export default function App() {
                     : category === 'laptop' ? 'Used laptops compared with new retail prices, or historical depreciation when unavailable'
                     : "Local asking prices, with matching used offers across Vietnam"}
                 </p>
-                <p>{(response ? response.fx : bootstrap?.fx)
-                  ? `Prices in USD · exchange rates dated ${(response ? response.fx : bootstrap?.fx)!.date} · retail prices and FX cached for 7 days`
-                  : 'USD exchange rate unavailable. Original asking prices remain in listing details; fresh verdicts are paused.'}</p>
+                <p>Prices and budgets in VND · retail prices cached for 7 days</p>
               </div>
               {loading && response && (
                 <span className="updating">
@@ -1438,7 +1432,7 @@ function ListingCard({
             </div>
             <div className="reference-caption">
               <span>
-                {reference.retail ? `${reference.sampleCount} retail source${reference.sampleCount === 1 ? '' : 's'} · ${valuation.status === 'indicative' ? 'indicative only' : valuation.confidence+' confidence'}` : adjusted
+                {reference.retail ? `${reference.sampleCount} retail source${reference.sampleCount === 1 ? '' : 's'} · ${reference.retail.fxStale ? 'stale exchange rate · indicative only' : valuation.status === 'indicative' ? 'indicative only' : valuation.confidence+' confidence'}` : adjusted
                   ? `${reference.baseSampleCount ?? reference.adjustedOffers?.length ?? reference.offers.length} computer offers · smallest pool ${reference.sampleCount} sellers`
                   : reference.kind === "component_floor"
                   ? `${reference.components.length} supported components`

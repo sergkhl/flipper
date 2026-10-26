@@ -180,6 +180,7 @@ export function appServer(service: FlipperService, dist = resolve('dist'), optio
       const retryCancel = path.match(/^\/api\/scan-retries\/([^/]+)\/cancel$/);
       if (retryCancel && req.method === 'POST') return json(res, { retry: service.cancelScanRetry(retryCancel[1]!) });
       if (path === '/api/listings' && readRequest) {
+        if (url.searchParams.has('priceCurrency') && url.searchParams.get('priceCurrency') !== 'VND') throw new HTTPError(400, 'Price filters use VND only');
         const category = parse(categorySchema, url.searchParams.get('category') ?? 'laptop');
         if (url.searchParams.has('view')) parse(z.enum(['all', 'saved', 'review', 'history', 'indicative', 'components']), url.searchParams.get('view'));
         for (const name of ['minRamGb', 'minVramGb']) if (url.searchParams.has(name)) {
@@ -207,7 +208,7 @@ export function appServer(service: FlipperService, dist = resolve('dist'), optio
         if (listingMatch[2] === 'analyze' && req.method === 'POST') { if (!service.detail(id)) throw new HTTPError(404, 'Listing not found'); return json(res, { job: service.analyze(id) }, 202); }
       }
       if (path === '/api/searches' && req.method === 'POST') {
-        const data = parse(z.object({ name: z.string().trim().min(1).max(100), category: categorySchema, query: z.string().max(200), district: z.string().max(100).default(''), mode: z.enum(['buy','resale']).default('buy'), maxPrice: z.number().finite().positive().nullable().default(null), priceCurrency: z.enum(['VND','USD']).default('VND'), ...memorySettingsSchema, opportunities: z.boolean().default(false) }).strict(), await mutationBody());
+        const data = parse(z.object({ name: z.string().trim().min(1).max(100), category: categorySchema, query: z.string().max(200), district: z.string().max(100).default(''), mode: z.enum(['buy','resale']).default('buy'), maxPrice: z.number().finite().positive().nullable().default(null), ...memorySettingsSchema, opportunities: z.boolean().default(false) }).strict(), await mutationBody());
         const settings = service.store.getSettings();
         return json(res, { search: service.store.saveSearch({ ...data,
           minRamGb: data.minRamGb ?? settings.minRamGb, minVramGb: data.minVramGb ?? settings.minVramGb,

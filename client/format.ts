@@ -1,9 +1,4 @@
 import type { Category, RefreshJob } from "../shared/types";
-import { validFx, type FxSnapshot } from '../shared/retail';
-
-let exchangeRates: FxSnapshot | null = null;
-export function setExchangeRates(value: FxSnapshot | null): void { exchangeRates = validFx(value) ? value : null; }
-export function vndToUsd(value: number): number | null { return validFx(exchangeRates) ? value / exchangeRates.rates.VND : null; }
 export function originalMoney(value: number, currency = 'VND'): string {
   return new Intl.NumberFormat('en-US',{style:'currency',currency,maximumFractionDigits:currency === 'VND' ? 0 : 2}).format(value);
 }
@@ -19,11 +14,12 @@ export const categorySingular: Record<Category, string> = {
   gpu: "GPU",
 };
 export function money(value: number | null | undefined): string {
-  const converted = value == null || !Number.isFinite(value) ? null : vndToUsd(value);
-  return converted === null ? '—' : originalMoney(converted,'USD');
+  return value == null || !Number.isFinite(value) ? '—' : originalMoney(value);
 }
 export function compactMoney(value: number): string {
-  return money(value);
+  return Number.isFinite(value) ? new Intl.NumberFormat('en-US', {
+    style:'currency',currency:'VND',notation:'compact',maximumFractionDigits:1,
+  }).format(value) : '—';
 }
 export function usd(value: number): string {
   return `$${value.toFixed(value < 0.01 ? 4 : 2)}`;

@@ -19,7 +19,6 @@ import type { RefreshProgress } from '../shared/types.ts';
 import { WorkPool, KeyedWork, concurrent } from './concurrency.ts';
 import { runSummary, runLimits, type StoredRun } from './runs.ts';
 import type { RunActivity, RunParameters, RunsResponse } from '../shared/types.ts';
-import { ExchangeRates } from './price-cache.ts';
 import { LaptopPriceBook } from './laptop-price-book.ts';
 
 const POOL_AGE_MS = 6 * 60 * 60 * 1000;
@@ -103,7 +102,7 @@ export class FlipperService {
     return () => { this.shutdownListeners.delete(listener); };
   }
   constructor(readonly store: Store, source?: Source, private memoryCatalog?: MemoryCatalog,
-    private now: () => Date = () => new Date(), private prices?: { fx: ExchangeRates; laptops: LaptopPriceBook }) {
+    private now: () => Date = () => new Date(), private prices?: LaptopPriceBook) {
     this.source = source ?? new ChototClient({ cooldownStore: store, requestStore: store, proxies: new ProxyPool(store) });
     store.importRunHistory(this.now()); store.interruptRuns(this.now());
   }
@@ -139,7 +138,7 @@ export class FlipperService {
   }
   private marketplaceStatus() { return { requests: this.store.sourceBudgetStatus(this.now()), proxies: this.source.proxyStatus?.() ?? null,
     ai: { limit: this.active?.settings.aiWorkers ?? this.store.getSettings().aiWorkers, active: this.active?.aiGate.running ?? 0 } }; }
-  bootstrap(): AdminBootstrapResponse { return { access: 'admin', fx:this.prices?.fx.snapshot() ?? null, settings: this.store.getSettings(), ai: this.aiStatus(), schedule: this.scheduleStatus(), searches: this.store.searches(), counts: this.store.counts(), marketplace: this.marketplaceStatus() }; }
+  bootstrap(): AdminBootstrapResponse { return { access: 'admin', settings: this.store.getSettings(), ai: this.aiStatus(), schedule: this.scheduleStatus(), searches: this.store.searches(), counts: this.store.counts(), marketplace: this.marketplaceStatus() }; }
   scheduleStatus(now = this.now()) { return { ...dailyScanStatus(this.store, this.activeJob(), this.deploymentStatus().busy, now), marketplace: this.marketplaceStatus() }; }
   configureDailyScans(enabled: boolean, now = this.now()) {
     this.ensureWorkAllowed(); this.store.configureDailyScans(enabled, now); return this.scheduleStatus(now);
@@ -174,7 +173,7 @@ export class FlipperService {
     return { minRamGb, minVramGb, includeUnknownMemory, discountPercent, minComparables };
   }
   publicBootstrap(): PublicBootstrapResponse {
-    return { access: 'read-only', fx:this.prices?.fx.snapshot() ?? null, settings: this.publicSettings(), ai: null, searches: [], counts: this.store.counts() };
+    return { access: 'read-only', settings: this.publicSettings(), ai: null, searches: [], counts: this.store.counts() };
   }
   private prepared(listing: StoredListing): StoredListing {
     const assessment = this.memoryAssessment(listing.raw, listing.assessment);
@@ -191,12 +190,9 @@ export class FlipperService {
   }
   private preparedView(listing: StoredListing, readOnly: boolean, settings: AppSettings): ListingView {
     const state = readOnly ? { ...EMPTY_STATE } : listing.state;
-    const retail = listing.assessment.kind === 'laptop' ? this.prices?.laptops.reference(listing.assessment.profile,this.prices.fx.snapshot()) : null;
-    let valuation = valueListing(listing.raw, listing.assessment, listing.assessment.kind === 'laptop' ? retail?.reference ?? null : listing.reference,
+    const retail = listing.assessment.kind === 'laptop' ? this.prices?.reference(listing.assessment.profile) : null;
+    const valuation = valueListing(listing.raw, listing.assessment, listing.assessment.kind === 'laptop' ? retail?.reference ?? null : listing.reference,
       settings, state, retail?.reason ?? listing.reason);
-    if (this.prices && !this.prices.fx.snapshot() && valuation.status !== 'excluded') valuation = { ...valuation,
-      status:'insufficient_evidence', opportunity:false, componentOpportunity:false, resaleOpportunity:false, discountPercent:null,
-      evidenceIssue:'exchange_rate', reason:'A current USD exchange-rate snapshot is unavailable; price verdicts are paused.' };
     if (!readOnly) return { ...listing.raw, assessment: listing.assessment, state, valuation };
     return { ...listing.raw,
       attributes: Object.fromEntries(Object.entries(listing.raw.attributes).filter(([key]) => !key.startsWith('_'))),
@@ -204,10 +200,10 @@ export class FlipperService {
       valuation: { ...valuation, costReserve: 0, expectedResale: null, profit: null, roiPercent: null, resaleOpportunity: false } };
   }
   detail(id: string): ListingDetail | null {
-    const item = this.store.getListing(id); return item ? { ...this.view(item), fx:this.prices?.fx.snapshot() ?? null, history: this.store.history(id) } : null;
+    const item = this.store.getListing(id); return item ? { ...this.view(item), history: this.store.history(id) } : null;
   }
   publicDetail(id: string): ListingDetail | null {
-    const item = this.store.getListing(id); return item ? { ...this.view(item, true), fx:this.prices?.fx.snapshot() ?? null, history: this.store.history(id) } : null;
+    const item = this.store.getListing(id); return item ? { ...this.view(item, true), history: this.store.history(id) } : null;
   }
   state(id: string, updates: Partial<ListingState>): ListingView | null {
     const item = this.store.setState(id, updates); return item ? this.view(item) : null;
@@ -220,6 +216,7 @@ export class FlipperService {
     return this.listingResponse(category, params, true);
   }
   private listingResponse(category: Category, params: URLSearchParams, readOnly: boolean): ListingsResponse {
+    if (params.has('priceCurrency') && params.get('priceCurrency') !== 'VND') throw new Error('Price filters use VND only');
     const query = normalize(params.get('q') ?? ''), view = params.get('view') ?? 'all';
     const settings = this.store.getSettings();
     const memory: MemoryFilters = { minRamGb: Number(params.get('minRamGb') ?? settings.minRamGb),
@@ -253,10 +250,7 @@ export class FlipperService {
     if (view === 'components') items = items.filter(item => item.valuation.componentOpportunity);
     const district = params.get('district'); if (district) items = items.filter((item) => item.district === district);
     const maxPrice = Number(params.get('maxPrice'));
-    if (maxPrice > 0) {
-      const rate = params.get('priceCurrency') === 'USD' ? this.prices?.fx.snapshot()?.rates.VND : 1;
-      items = rate ? items.filter(item => item.price <= maxPrice*rate) : [];
-    }
+    if (maxPrice > 0) items = items.filter(item => item.price <= maxPrice);
     if (params.get('opportunities') === 'true') items = items.filter((item) => item.valuation.opportunity);
     const sort = params.get('sort');
     items.sort(sort === 'price' ? (a,b) => a.price-b.price : sort === 'newest' ? (a,b) => b.observedAt.localeCompare(a.observedAt)
@@ -266,7 +260,7 @@ export class FlipperService {
     const coverage: Coverage | null = readOnly ? pool.length ? { category, query, scanned: pool.length, limit: pool.length,
       totalAvailable: null, completedAt: pool.reduce((latest, row) => row.raw.observedAt > latest ? row.raw.observedAt : latest, ''),
       error: null, requestCount: 0 } : null : this.store.coverage(category, query);
-    return { items, total: items.length, stats, districts, coverage, fx:this.prices?.fx.snapshot() ?? null,
+    return { items, total: items.length, stats, districts, coverage,
       job: readOnly ? null : this.active?.job ?? null, ai: readOnly ? null : this.aiStatus() };
   }
   activeJob(): RefreshJob | null { return this.active?.job ?? null; }
@@ -279,15 +273,14 @@ export class FlipperService {
     const signal = AbortSignal.any([this.priceAbort.signal,AbortSignal.timeout(120_000)]);
     const work = async () => {
       try {
-        await this.prices!.fx.warm(signal);
         const profiles = new Map<string,HardwareProfile>();
         for (const row of this.store.marketListings('laptop')) {
           const a = this.prepared(row).assessment;
           if (a.eligibility !== 'excluded' && a.profile.model) profiles.set(JSON.stringify(a.profile),a.profile);
         }
         const selected = [...profiles.values()].sort((a,b) =>
-          (this.prices!.laptops.lookup(a)?.checkedAt ?? '').localeCompare(this.prices!.laptops.lookup(b)?.checkedAt ?? '')).slice(0,12);
-        await concurrent(selected,2,p => this.prices!.laptops.warm(p,signal));
+          (this.prices!.lookup(a)?.checkedAt ?? '').localeCompare(this.prices!.lookup(b)?.checkedAt ?? '')).slice(0,12);
+        await concurrent(selected,2,p => this.prices!.warm(p,signal));
       } catch { /* Each provider retains its own failure state; retry on the next maintenance tick. */ }
       finally { this.nextPriceRefresh = this.now().valueOf()+15*60_000; this.priceAbort = null; this.store.notifyActivity(); }
     };
@@ -604,7 +597,6 @@ export class FlipperService {
     }
     job.scanned = gathered.size; job.assessed = progress.assessedIds.length; job.benchmarked = progress.comparedIds.length;
     try {
-      if (this.prices) await this.prices.fx.warm(context.abort.signal);
       let page = progress.nextPage;
       while (!progress.collected && gathered.size < job.target) {
         this.checkWork(context); this.countRequest(context);
@@ -682,7 +674,6 @@ export class FlipperService {
   }
   private async runFocused(context: JobContext, listing: StoredListing): Promise<void> {
     try {
-      if (this.prices) await this.prices.fx.warm(context.abort.signal);
       const canResume = context.progress.assessedIds.includes(listing.raw.id)
         && Date.now() - Date.parse(listing.raw.observedAt) < 24 * 60 * 60_000;
       const raw = canResume ? listing.raw : await this.enriched(listing.raw, context, true); context.job.scanned = 1;
@@ -846,8 +837,8 @@ export class FlipperService {
     const target = verified[0]!, kind = target.assessment.kind;
     if (kind === 'laptop') {
       for (const member of verified) {
-        await this.prices?.laptops.warm(member.assessment.profile,context.abort.signal);
-        const result = this.prices?.laptops.reference(member.assessment.profile,this.prices.fx.snapshot());
+        await this.prices?.warm(member.assessment.profile,context.abort.signal);
+        const result = this.prices?.reference(member.assessment.profile);
         this.store.setAssessment(member.raw.id,member.assessment);
         this.store.setReference(member.raw.id,result?.reference ?? null,result?.reason ?? 'Retail price sources are not configured');
         context.job.benchmarked++;

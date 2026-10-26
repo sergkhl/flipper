@@ -99,7 +99,7 @@ imported when present; legacy in-memory manual history is unavailable.
 ### Existing workspace actions
 
 - `GET /api/bootstrap` → BootstrapResponse.
-- `GET /api/listings?category=laptop|desktop|gpu&q=...&district=...&view=all|saved|review|history|indicative|components&opportunities=true|false&maxPrice=...&priceCurrency=VND|USD&minRamGb=...&minVramGb=...&includeUnknownMemory=true|false&sort=value|newest|price` → ListingsResponse. Missing memory parameters use persistent settings defaults (initially RAM 16 GB, VRAM 8 GB, include unknown true). RAM applies only to computers. VRAM applies to standalone GPUs and included discrete graphics; integrated-only and explicitly GPU-free computers are exempt. Minimums are inclusive; zero disables a capacity threshold. The unknown-memory flag independently includes/excludes unknown applicable capacities, including with a zero threshold. Known below-minimum capacity always fails. The policy applies before view selection and statistics. Missing memory capacity alone may stay in the main feed when included, but other review reasons and price-evidence gates remain effective. Collection coverage and scanned count describe the unfiltered pool. Legacy `mode` does not change deal filtering, counts or ranking.
+- `GET /api/listings?category=laptop|desktop|gpu&q=...&district=...&view=all|saved|review|history|indicative|components&opportunities=true|false&maxPrice=...&minRamGb=...&minVramGb=...&includeUnknownMemory=true|false&sort=value|newest|price` → ListingsResponse. `maxPrice` is VND. Missing memory parameters use persistent settings defaults (initially RAM 16 GB, VRAM 8 GB, include unknown true). RAM applies only to computers. VRAM applies to standalone GPUs and included discrete graphics; integrated-only and explicitly GPU-free computers are exempt. Minimums are inclusive; zero disables a capacity threshold. The unknown-memory flag independently includes/excludes unknown applicable capacities, including with a zero threshold. Known below-minimum capacity always fails. The policy applies before view selection and statistics. Missing memory capacity alone may stay in the main feed when included, but other review reasons and price-evidence gates remain effective. Collection coverage and scanned count describe the unfiltered pool. Legacy `mode` does not change deal filtering, counts or ranking.
 - `POST /api/refresh` with `{category, query?, limit?, minRamGb?, minVramGb?, includeUnknownMemory?}` → `{job: RefreshJob}`. Omitted memory parameters use settings defaults. Bounded detail/AI and comparison work prioritizes known matches, possible unknown matches, then known failures, with price ordering within groups. Source collection and nationwide reference pools retain their existing bounds and matching rules.
 - `GET /api/jobs/active` → `{job: RefreshJob|null}`.
 - `GET /api/deployment` → `{busy: boolean}`. Private activation readiness; active
@@ -163,20 +163,24 @@ estimates may show a mathematical gap but never a deal badge. Statistics expose 
 `indicative` separately. `evidenceIssue` identifies a missing, sparse, outdated,
 unavailable or ambiguous input for a specific UI explanation.
 
-Bootstrap, listings and detail responses include `fx: FxSnapshot | null` with
-base USD, currency units per USD, provider date, fetch date and source URL.
-Monetary fields in existing listing/reference/history/state APIs remain native
-VND for compatibility. The client converts all displays with this one snapshot;
-retail source records also preserve their own original currencies/amounts.
-`maxPrice` is VND by default; `priceCurrency=USD` explicitly requests a USD budget.
-Saved searches persist `priceCurrency: 'VND' | 'USD'`; untagged older searches
-remain VND and are converted when opened. Without usable FX, a USD price filter
-returns no items and no fresh price verdict is issued.
+Listing, reference, history, state and saved-budget monetary fields use VND.
+`maxPrice` compares the exact native amount, inclusively. An explicit non-VND
+`priceCurrency` query is rejected with HTTP 400. Saved searches accept VND budgets
+without a currency tag. Bootstrap, listing-feed and detail responses have no
+top-level exchange-rate snapshot; native VND reads and verdicts need no FX.
+AI costs and allowances remain in USD.
 
 Laptop `ReferencePrice.kind` is `retail_new` or `historical_depreciation`.
-`retail` contains the basis, policy version, original/estimated USD values, range,
-configuration-specific source records, class/age/retention, lookup status/date,
-indicative reasons and the exact FX snapshot. One verified retail source can
+`retail` contains the basis, policy version, `originalVnd`, `referenceVnd`,
+`rangeVnd`, configuration-specific source records with `amountVnd`, class/age/
+retention, lookup status/date and indicative reasons. Source records preserve
+their original `amount` and `currency`. Only foreign-derived references include
+a non-null `fx` snapshot (base USD, currency units per USD, provider date, fetch
+date and source URL); `fxStale` indicates that its seven-day lifetime has expired.
+Failed rate refreshes retain those references as visibly stale indicative
+estimates, without deal badges. A missing usable rate leaves foreign evidence
+unpriced. Native VND references use `fx: null`, `fxStale: false` and remain usable.
+One verified retail source can
 support medium confidence; `minComparables` remains a GPU/desktop rule. Old
 laptop used-peer references are ignored. New evidence issues `retail_price` and
 `exchange_rate` distinguish missing price provenance from unavailable conversion.
