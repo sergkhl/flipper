@@ -20,11 +20,13 @@ saved items and settings belong to the private administrator workspace.
 
 These captures show the actual application UI and API with synthetic listings,
 comparisons, price histories and run records in an isolated in-memory instance.
-Prices, request counts and AI accounting are illustrative; no marketplace seller
-data or photographs are included. The captures demonstrate the interface, not
-live provider availability or production execution.
+Prices, request counts and AI accounting are illustrative. The Discover view uses
+AI-generated product photos based on official manufacturer references; see their
+[sources and prompts](docs/images/products/provenance.md). No marketplace seller
+data is included. The captures demonstrate the interface, not live provider
+availability or production execution.
 
-![Flipper's public market browser with synthetic hardware listings, specification filters and asking-price references](docs/images/flipper-discover.png)
+![Flipper's public market browser with illustrative GPU photos, synthetic hardware listings, specification filters and asking-price references](docs/images/flipper-discover.png)
 
 **Find hardware that fits.** Model, memory, district and VND budget filters narrow
 the local market, while reference prices help identify candidates worth a closer
