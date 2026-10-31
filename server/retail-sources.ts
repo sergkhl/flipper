@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { HardwareProfile, RawListing } from '../shared/types.ts';
-import { freshDate, type RetailLookup, type RetailPrice } from '../shared/retail.ts';
-import { assessWithRules, cpuModels, normalize, retailLaptopModel } from './hardware.ts';
+import { freshDate, type RetailLookup, type RetailPrice, type RetailPartKind } from '../shared/retail.ts';
+import { assessWithRules, cpuModels, gpuModels, normalize, retailLaptopModel } from './hardware.ts';
 import { readPublic, type PriceFetch, type RuntimeCache } from './price-cache.ts';
 import { concurrent, WorkPool } from './concurrency.ts';
 
@@ -32,12 +32,58 @@ function nodes(value: unknown): Record<string, any>[] {
   if (!object(value)) return [];
   return [value, ...array(value['@graph']).flatMap(nodes)];
 }
-function productProfile(product: Record<string, any>, url: string, at: string): HardwareProfile {
-  const properties = array(product.additionalProperty).filter(object).map(p => `${plain(text(p.name))}: ${plain(text(p.value))}`);
-  const title = plain(text(product.name)), description = [plain(text(product.description)),...properties].join('\n');
-  const raw: RawListing = { id: url, title, description, category:'laptop', price:1, url, images:[], sellerId:null,
+type RetailKind = 'laptop' | RetailPartKind;
+function productProfile(product: Record<string, any>, url: string, at: string, kind: RetailKind): HardwareProfile {
+  const properties = array(product.additionalProperty).filter(object).flatMap(p => {
+    const name = plain(text(p.name)), value = plain(text(p.value)), field = normalize(name);
+    // A CPU's supported RAM generations are controller capabilities, not conflicting installed RAM.
+    if (kind === 'cpu') return cpuModels(value).length && /cpu|model|ten goi|vi xu ly/.test(field) ? [`${name}: ${value}`] : [];
+    if (kind === 'ram' && /ecc/.test(field)) {
+      if (/on[- ]die/.test(field)) return [];
+      if (/^(?:khong|no|non|false|0)(?:\b|$)/.test(normalize(value))) return ['non-ECC'];
+      if (/^(?:n\/?a|none|khong ro|unknown|-)?$/.test(normalize(value))) return [];
+    }
+    return [`${name}: ${value}`];
+  });
+  const title = plain(text(product.name)).replace(/\bRAM Desktop\b/gi,'RAM PC');
+  // Component marketing copy mentions other models and upgrade limits. Only the named product and its structured specifications identify a part.
+  const description = [...(kind === 'laptop' ? [plain(text(product.description))] : []),...properties].join('\n');
+  const raw: RawListing = { id: url, title, description, category:kind, price:1, url, images:[], sellerId:null,
     sellerType:'business', region:'', district:'', ward:'', condition:'new', params:{}, attributes:{}, observedAt:at, displayAge:'' };
   const result = assessWithRules(raw);
+  if (result.kind !== kind) throw new Error('Retail product is not the requested hardware kind');
+  if (kind !== 'laptop') {
+    const named = normalize(title);
+    if (/\b(?:combo|bundle|kem bo|kem may|waterblock|backplate|riser)\b/.test(named)
+      || (kind === 'gpu' || kind === 'cpu') && /\b(?:laptop|mobile)\b/.test(named)) throw new Error('Not an individual desktop component');
+    if (kind === 'ssd') {
+      if (/\b(?:gan ngoai|external|portable|usb|di dong)\b/.test(named)) throw new Error('External storage is not an internal SSD');
+      const interfaces = normalize(`${title}\n${description}`);
+      if (/\bnvme\b/.test(interfaces) && /\bsata\b/.test(interfaces)) throw new Error('Retail SSD interface is conflicting');
+    }
+    if (kind === 'ram') {
+      const layout = title.match(/\b(\d{1,2})\s*[x×]\s*(\d{1,3})\s*gb\b/i);
+      const total = title.match(/\b(\d{1,3})\s*gb\b/i);
+      if (layout && total && Number(total[1]) !== Number(layout[1])*Number(layout[2]) && total.index! < layout.index!) throw new Error('Retail RAM capacity and layout conflict');
+      // A total plus its explicit kit layout are consistent claims, not two installed capacities.
+      if (layout) {
+        for (const property of array(product.additionalProperty).filter(object)) {
+          if (!/^(?:dung luong|capacity|total capacity|tong dung luong|bo nho)$/.test(normalize(plain(text(property.name))))) continue;
+          const explicit = plain(text(property.value)).match(/^(\d{1,3})\s*gb$/i);
+          if (explicit && Number(explicit[1]) !== Number(layout[1])*Number(layout[2])) throw new Error('Retail RAM structured capacity and layout conflict');
+        }
+        result.profile.quantity = Number(layout[1]); result.profile.perUnitGb = Number(layout[2]);
+        result.profile.ramGb = Number(layout[1])*Number(layout[2]);
+        result.conflicts = result.conflicts.filter(c => c !== 'Title and description disagree about RAM capacity');
+      }
+    }
+    if (result.conflicts.length) throw new Error('Retail product configuration is conflicting');
+    const p = result.profile;
+    if (kind === 'gpu' && (!p.gpu || !p.vramGb || p.gpuClass !== 'desktop')
+      || kind === 'cpu' && !p.cpu || kind === 'ram' && (!p.ramGb || !p.ramType || !p.ramFormFactor)
+      || kind === 'ssd' && (!p.storageGb || !/SSD/.test(p.storageType ?? ''))) throw new Error('Retail component identity is incomplete');
+    return p;
+  }
   if (result.conflicts.length) throw new Error('Retail product configuration is conflicting');
   const shown = titleCapacities(title), ramFromTitle = result.profile.ramGb === null && shown.ramGb !== null;
   return { ...result.profile, model: result.profile.model ?? retailLaptopModel(title),
@@ -62,7 +108,7 @@ function shownOnPage(amount: number, visible: string): boolean {
 }
 
 /** Read structured product offers only; crossed-out/list/instalment prices are never substituted. */
-export function parseRetailPage(html: string, url: string, now = Date.now()): RetailPrice[] {
+export function parseRetailPage(html: string, url: string, now = Date.now(), kind: RetailKind = 'laptop'): RetailPrice[] {
   const at = new Date(now).toISOString(), products: Record<string,any>[] = [];
   for (const match of html.matchAll(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
     // Raw control characters inside generated strings are invalid JSON but carry no product data.
@@ -87,13 +133,14 @@ export function parseRetailPage(html: string, url: string, now = Date.now()): Re
       if (!schemaType(offer.availability,'InStock')) throw new Error('Retail stock availability is unverified');
       const amount = Number(offer.price), currency = text(offer.priceCurrency);
       if (!Number.isFinite(amount) || amount < 0 || !/^[A-Z]{3}$/.test(currency)) throw new Error('Retail offer has no valid cash price');
-      if (currency === 'VND' ? amount < MIN_RETAIL_LAPTOP_VND : amount === 0) continue;
+      if (currency === 'VND' ? amount < (kind === 'laptop' ? MIN_RETAIL_LAPTOP_VND : 50_000) : amount === 0) continue;
+      if (kind !== 'laptop' && /\b(?:tinh trang\s*:?\s*(?:hang dat truoc|order truoc|het hang)|san pham da ngung kinh doanh)\b/.test(normalize(visible))) continue;
       // Shops publish template validity dates (past, today or 2099), so freshness comes from Flipper's own observation date.
       if (offer.validFrom && Date.parse(offer.validFrom) > now) continue;
       if (offer.eligibleCustomerType || offer.eligibleQuantity || offer.membershipPointsEarned) continue;
       if (!shownOnPage(amount,visible)) throw new Error('Structured retail price is not shown on the product page');
-      const profile = productProfile(product,url,at);
-      if (!profile.model) throw new Error('Retail laptop model is unrecognized');
+      const profile = productProfile(product,url,at,kind);
+      if (kind === 'laptop' && !profile.model) throw new Error('Retail laptop model is unrecognized');
       // Domestic shops: the VAT-inclusive cash price is the purchase cost; delivery is not part of the comparison.
       result.push({ id:`${url}#${product.sku ?? result.length}`, title:plain(text(product.name)).trim(), url, source:new URL(url).hostname,
         profile, amount, currency, observedAt:at, basis:'current_new',
@@ -123,6 +170,32 @@ function candidates(urls: string[], profile: HardwareProfile, terms: string[]): 
   });
 }
 
+const partPaths: Record<RetailPartKind, RegExp> = {
+  gpu: /^\/(?:card-man-hinh-|vga-)/,
+  cpu: /^\/(?:cpu-|bo-vi-xu-ly-)/,
+  ram: /^\/(?:ram-|bo-nho-trong-)/,
+  ssd: /^\/(?:o-cung-(?:gan-trong-)?(?:ssd|the-ran)|ssd-)/,
+};
+export const ssdCapacityClass = (gb: number | null): number | null =>
+  [[120,128],[240,250,256],[480,500,512],[960,1000,1024]].find(group => gb !== null && group.includes(gb))?.at(-1) ?? gb;
+function partTerms(kind: RetailPartKind, p: HardwareProfile): string[] {
+  if (kind === 'cpu') return (p.cpu ?? '').toLowerCase().split(/[ -]+/).filter(Boolean);
+  if (kind === 'gpu') return (p.gpu ?? '').toLowerCase().split(/[ -]+/).filter(Boolean);
+  if (kind === 'ram') return ['ram', p.ramType?.toLowerCase() ?? '', `${p.ramGb}gb`].filter(Boolean);
+  return ['ssd', /nvme/i.test(p.storageType ?? '') ? 'nvme' : /sata/i.test(p.storageType ?? '') ? 'sata' : ''];
+}
+function partCandidates(urls: string[], kind: RetailPartKind, p: HardwareProfile): string[] {
+  const compact = (s: string) => normalize(s).replace(/[^a-z0-9]/g,'');
+  return urls.filter(url => partPaths[kind].test(new URL(url).pathname)).filter(url => {
+    const path = slug(new URL(url).pathname).replace(/[-_/]+/g,' ');
+    if (kind === 'cpu') return cpuModels(path).some(cpu => compact(cpu) === compact(p.cpu ?? ''));
+    if (kind === 'gpu') return gpuModels(path).some(gpu => compact(gpu) === compact(p.gpu ?? ''));
+    if (kind === 'ram') return compact(path).includes(compact(p.ramType ?? ''))
+      && (new RegExp(`(?:^|[^0-9])${p.ramGb}\\s*(?:gb|g)\\b`).test(path) || /\b\d+\s*x\s*\d+\s*(?:gb|g)\b/.test(path));
+    return [...path.matchAll(/\b(\d{1,4})\s*(gb|g|tb)\b/g)].some(m => ssdCapacityClass(Number(m[1])*(m[2] === 'tb' ? 1024 : 1)) === ssdCapacityClass(p.storageGb));
+  });
+}
+
 /** Free public catalog/product pages, with shared bounded concurrency and durable seven-day caches. */
 export class PublicRetailSources {
   private gate = new WorkPool(3);
@@ -144,8 +217,8 @@ export class PublicRetailSources {
   private async read(url: string, signal?: AbortSignal, maxBytes = 5_000_000) {
     return this.gate.run(() => readPublic(url,allowed,this.fetcher,signal,maxBytes),signal);
   }
-  private async hacomIndex(signal?: AbortSignal): Promise<string[]> {
-    return this.cached('prices:hacom:index:v1',async () => {
+  private async hacomIndex(signal?: AbortSignal, parts = false): Promise<string[]> {
+    return this.cached(`prices:hacom:index:${parts ? 'parts-v1' : 'v1'}`,async () => {
       const index = await this.read('https://hacom.vn/sitemap.xml',signal);
       const maps = sitemapUrls(index.body).filter(url => /^https:\/\/hacom\.vn\/sitemap-product-\d+\.xml$/.test(url));
       if (!maps.length || maps.length > 64) throw new Error('Retail sitemap index is incomplete or too large');
@@ -156,7 +229,8 @@ export class PublicRetailSources {
       });
       const urls = [...new Set(pages.flat())];
       if (urls.length > 100_000) throw new Error('Retail catalog exceeds limit');
-      return urls.filter(url => /^https:\/\/hacom\.vn\/(?:laptop-|macbook)/.test(url));
+      return urls.filter(url => /^https:\/\/hacom\.vn\//.test(url) && (parts
+        ? Object.values(partPaths).some(pattern => pattern.test(new URL(url).pathname)) : /^https:\/\/hacom\.vn\/(?:laptop-|macbook)/.test(url)));
     },signal);
   }
   /** One product sitemap per shop; only laptop and MacBook product pages are retained. */
@@ -169,12 +243,12 @@ export class PublicRetailSources {
       return urls.filter(item => pattern.test(item));
     },signal);
   }
-  private async products(urls: string[], errors: string[], checkedUrls: string[], signal?: AbortSignal): Promise<RetailPrice[]> {
+  private async products(urls: string[], errors: string[], checkedUrls: string[], signal?: AbortSignal, kind: RetailKind = 'laptop'): Promise<RetailPrice[]> {
     if (urls.length > 12) errors.push('Retail variants exceed the twelve-page limit; absence of a new price is unproven.');
     return (await concurrent(urls.slice(0,12),3,async url => {
       try {
-        const page = await this.cached(`prices:product:v3:${digest(url)}`,async () => {
-          const page = await this.read(url,signal); return {url:page.url,offers:parseRetailPage(page.body,page.url,this.now())};
+        const page = await this.cached(`prices:product:${kind === 'laptop' ? 'v3' : `${kind}-v1`}:${digest(url)}`,async () => {
+          const page = await this.read(url,signal); return {url:page.url,offers:parseRetailPage(page.body,page.url,this.now(),kind)};
         },signal);
         checkedUrls.push(url,page.url); return page.offers;
       } catch (error) {
@@ -182,19 +256,21 @@ export class PublicRetailSources {
       }
     })).flat();
   }
-  async lookup(profile: HardwareProfile, signal?: AbortSignal): Promise<RetailLookup> {
-    const terms = modelTerms(profile), errors: string[] = [], offers: RetailPrice[] = [], checkedUrls: string[] = [];
+  async lookup(profile: HardwareProfile, signal?: AbortSignal, kind: RetailKind = 'laptop'): Promise<RetailLookup> {
+    const parts = kind !== 'laptop';
+    const terms = parts ? partTerms(kind,profile) : modelTerms(profile), errors: string[] = [], offers: RetailPrice[] = [], checkedUrls: string[] = [];
     if (!terms.length) return { checkedAt:new Date(this.now()).toISOString(),status:'failed',offers,errors:['Laptop model is missing'] };
-    const fromIndex = (index: Promise<string[]>) => index.then(urls => this.products(candidates(urls,profile,terms),errors,checkedUrls,signal));
+    const select = (urls: string[], names = terms) => parts ? partCandidates(urls,kind,profile) : candidates(urls,profile,names);
+    const fromIndex = (index: Promise<string[]>) => index.then(urls => this.products(select(urls),errors,checkedUrls,signal,kind));
     const jobs: Array<[string, () => Promise<RetailPrice[]>]> = [
-      ['HACOM', () => fromIndex(this.hacomIndex(signal))],
-      ['Phong Vũ', () => fromIndex(this.sitemapIndex('prices:phongvu:index:v1','https://phongvu.vn/sitemap-collection-products-4-laptop.xml',
+      ['HACOM', () => fromIndex(this.hacomIndex(signal,parts))],
+      ['Phong Vũ', () => fromIndex(parts ? this.phongvuPartsIndex(signal) : this.sitemapIndex('prices:phongvu:index:v1','https://phongvu.vn/sitemap-collection-products-4-laptop.xml',
         /^https:\/\/phongvu\.vn\/(?!.*(?:thanh-ly|demo))/,1_000_000,signal))],
       // TNC's single product sitemap is about 6.4 MB; its laptop and MacBook pages are a small part of it.
-      ['TNC', () => fromIndex(this.sitemapIndex('prices:tnc:index:v1','https://www.tnc.com.vn/sitemaps/sitemap_product.xml',
-        /^https:\/\/www\.tnc\.com\.vn\/(?:laptop-|macbook-)/,10_000_000,signal))],
+      ['TNC', () => fromIndex(this.sitemapIndex(`prices:tnc:index:${parts ? 'parts-v1' : 'v1'}`,'https://www.tnc.com.vn/sitemaps/sitemap_product.xml',
+        parts ? /^https:\/\/www\.tnc\.com\.vn\// : /^https:\/\/www\.tnc\.com\.vn\/(?:laptop-|macbook-)/,10_000_000,signal))],
       ['An Phát', async () => {
-        const links = await this.cached(`prices:anphat:search:v1:${digest(terms.join(' '))}`,async () => {
+        const discovery = await this.cached(`prices:anphat:search:${parts ? 'parts-v1' : 'v1'}:${digest(terms.join(' '))}`,async () => {
           const page = await this.read(`https://www.anphatpc.com.vn/tim?q=${encodeURIComponent(terms.join(' '))}`,signal);
           const document = page.body.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'');
           const links: string[] = [];
@@ -204,10 +280,14 @@ export class PublicRetailSources {
             if (href) { const url = new URL(decode(href),page.url); if (url.hostname === 'www.anphatpc.com.vn') links.push(url.href); }
           }
           if (!links.length && !/\b0\s+san pham\b/.test(normalize(plain(page.body)))) throw new Error('Retail search results are not readable');
-          if (/href=["'][^"']*[?&](?:page|p)=2\b/.test(document)) throw new Error('Retail search exceeds the first-page limit');
-          return [...new Set(links)];
+          const truncated = /href=["'][^"']*[?&](?:page|p)=2\b/.test(document);
+          if (!parts && truncated) throw new Error('Retail search exceeds the first-page limit');
+          const unique = [...new Set(links)];
+          return parts ? {links:unique,truncated} : unique;
         },signal);
-        return this.products(candidates(links,profile,[]),errors,checkedUrls,signal);
+        const links = Array.isArray(discovery) ? discovery : discovery.links;
+        if (!Array.isArray(discovery) && discovery.truncated) errors.push('An Phát search exceeds the first-page limit; absence is unproven.');
+        return this.products(select(links,[]),errors,checkedUrls,signal,kind);
       }],
     ];
     const results = await Promise.allSettled(jobs.map(([, job]) => job()));
@@ -218,5 +298,18 @@ export class PublicRetailSources {
     signal?.throwIfAborted();
     return { checkedAt:new Date(this.now()).toISOString(),status:errors.length ? 'failed' : 'complete',offers,
       errors:[...new Set(errors)],checkedUrls:[...new Set(checkedUrls)] };
+  }
+  private async phongvuPartsIndex(signal?: AbortSignal): Promise<string[]> {
+    return this.cached('prices:phongvu:index:parts-v1',async () => {
+      const index = await this.read('https://phongvu.vn/sitemap-collection-products.xml',signal);
+      const maps = sitemapUrls(index.body).filter(url => /^https:\/\/phongvu\.vn\/sitemap-collection-products-\d+-[^/]+\.xml$/.test(url)
+        && /linh-kien|cpu|ram|vga|card-man-hinh|o-cung|ssd/.test(url));
+      if (!maps.length || maps.length > 32) throw new Error('Component sitemap index is unreadable or exceeds limits');
+      const pages = await concurrent(maps,3,url => this.read(url,signal));
+      if (pages.some(page => !/<urlset\b/.test(page.body))) throw new Error('Invalid component sitemap');
+      const urls = [...new Set(pages.flatMap(page => sitemapUrls(page.body)))];
+      if (urls.length > 100_000) throw new Error('Component catalog exceeds limit');
+      return urls;
+    },signal);
   }
 }

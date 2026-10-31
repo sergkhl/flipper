@@ -5,7 +5,8 @@
 Flipper turns used laptops, desktops and graphics-card listings into a searchable
 workspace for personal buying. It compares candidates in Da Nang with nationwide
 used asking prices for same-parts laptops, GPUs and desktops, and MacBooks with new
-retail prices, then shows the specifications, sources and uncertainty behind each
+retail prices. GPUs and desktops also have separate current-retail component
+estimates reduced by 25%. It shows the specifications, sources and uncertainty behind each
 reference. The application is
 [MIT-licensed](LICENSE); phones are outside its current scope.
 
@@ -218,6 +219,18 @@ integration is configured. Operate one server process per data directory.
   scoring and deal badges require **at least five** after filtering; that
   minimum can be increased. Indicative references have low confidence and no
   suggested maximum buy price.
+- **Separate depreciated retail estimates:** GPUs and desktop CPU/GPU/RAM/SSD
+  parts are also looked up at the four reviewed Vietnamese shops. The lowest
+  verified in-stock, VAT-inclusive new cash price is multiplied by **75%**. This
+  fixed 25% reduction is a policy assumption, not measured wear or market
+  depreciation. GPU chip/VRAM/memory variants and CPU models match exactly;
+  RAM matches compatible capacity/generation/form factor and SSDs match capacity
+  class/interface across brands. Unknown RAM speed/layout or SSD interface gives
+  an indicative range without a badge. Unsupported parts stay unpriced. Desktop
+  totals explicitly omit motherboard, PSU, case, cooling, peripherals and assembly.
+  Use **Below depreciated estimates** for these separately labeled finds; their
+  discounts and badges never change the used-market comparison. See
+  [ADR 0014](docs/adr/0014-depreciated-component-retail.md).
 - Numerical outliers use the lower and upper quartiles, expanded by 1.5 times
   the larger of the IQR or 10% of the median. This keeps equal-price cohorts from
   accepting an arbitrarily large outlier when their IQR is zero.

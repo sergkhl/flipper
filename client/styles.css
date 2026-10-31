@@ -1020,6 +1020,26 @@ strong {
   font-size: 9px;
   color: #a4b090;
 }
+.depreciated-retail {
+  margin-top: 12px;
+  padding: 13px;
+  border: 1px solid #dbe4ed;
+  border-radius: 8px;
+  background: #f5f8fc;
+  min-width: 0;
+}
+.retail-estimate-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; }
+.retail-estimate-heading > span { font-size: 12px; color: #4c6076; }
+.retail-estimate-heading > strong { font-size: 21px; color: #304c68; }
+.retail-estimate-caption, .compact-retail > small { font-size: 11px; line-height: 1.6; color: #63748a; }
+.retail-estimate-caption { margin: 6px 0; }
+.retail-estimate-badge { margin-bottom: 10px; background: #e1ecf7 !important; color: #304e6e !important; white-space: normal !important; line-height: 1.5; }
+.retail-estimate-sources { display: grid; gap: 8px; }
+.retail-estimate-sources > a { display: grid; gap: 4px; border: 1px solid #dbe4ed; padding: 10px; border-radius: 6px; overflow-wrap: anywhere; }
+.retail-estimate-sources strong { font-size: 12px; color: #304e6e; }
+.retail-estimate-sources span, .retail-estimate-sources small { font-size: 11px; line-height: 1.6; }
+.depreciated-retail .notice ul { padding-left: 18px; margin: 8px 0 0; }
+.depreciated-retail .notice li { margin: 4px 0; }
 .image-tags {
   position: absolute;
   top: 10px;

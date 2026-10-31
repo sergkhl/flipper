@@ -22,6 +22,7 @@ import { WorkPool, KeyedWork, concurrent } from './concurrency.ts';
 import { runSummary, runLimits, type StoredRun } from './runs.ts';
 import type { RunActivity, RunParameters, RunsResponse } from '../shared/types.ts';
 import { LaptopPriceBook } from './laptop-price-book.ts';
+import { PartsPriceBook } from './parts-retail.ts';
 
 const POOL_AGE_MS = 6 * 60 * 60 * 1000;
 const AUTO_COHORTS = 12;
@@ -113,7 +114,7 @@ export class FlipperService {
     return () => { this.shutdownListeners.delete(listener); };
   }
   constructor(readonly store: Store, source?: Source, private memoryCatalog?: MemoryCatalog,
-    private now: () => Date = () => new Date(), private prices?: LaptopPriceBook) {
+    private now: () => Date = () => new Date(), private prices?: LaptopPriceBook, private partsPrices?: PartsPriceBook) {
     this.source = source ?? new ChototClient({ cooldownStore: store, requestStore: store, proxies: new ProxyPool(store) });
     store.importRunHistory(this.now()); store.interruptRuns(this.now());
   }
@@ -207,6 +208,9 @@ export class FlipperService {
     const valuation = !laptop ? valueListing(listing.raw, listing.assessment, listing.reference, settings, state, listing.reason)
       : mac ? valueListing(listing.raw, listing.assessment, retail!.reference, settings, state, retail!.reason)
       : valueListing(listing.raw, listing.assessment, listing.reference, settings, state, listing.reason, retail!);
+    if (!laptop && ['desktop','gpu'].includes(listing.assessment.kind) && this.partsPrices) {
+      valuation.depreciatedRetail = this.partsPrices.estimate(listing.raw,listing.assessment);
+    }
     if (!readOnly) return { ...listing.raw, assessment: listing.assessment, state, valuation };
     return { ...listing.raw,
       attributes: Object.fromEntries(Object.entries(listing.raw.attributes).filter(([key]) => !key.startsWith('_'))),
@@ -252,22 +256,26 @@ export class FlipperService {
     const needsReview = (item: ListingView) => (item.assessment.eligibility !== 'eligible' || item.valuation.status === 'needs_review')
       && !admittedUnknownMemory.has(item.id);
     items = items.filter((item) => matchesMemory(category, item.assessment.profile, memory));
-    const stats = { scanned: pool.length, benchmarked: items.filter((item) => item.valuation.reference !== null).length,
+    const indicative = (item: ListingView) => item.valuation.status === 'indicative' || item.valuation.depreciatedRetail?.status === 'indicative';
+    const stats = { scanned: pool.length, benchmarked: items.filter((item) => item.valuation.reference !== null || item.valuation.depreciatedRetail?.estimateVnd != null).length,
       opportunities: items.filter((item) => item.valuation.opportunity).length,
       componentOpportunities: items.filter(item => item.valuation.componentOpportunity).length,
-      indicative: items.filter(item => item.valuation.status === 'indicative').length,
+      retailOpportunities: items.filter(item => item.valuation.depreciatedRetail?.opportunity).length,
+      indicative: items.filter(indicative).length,
       saved: items.filter((item) => item.state.saved).length, excluded: items.filter(needsReview).length };
     if (view === 'saved') items = items.filter((item) => item.state.saved);
     else if (view === 'review') items = items.filter((item) => needsReview(item) || item.state.dismissed);
-    else if (view === 'indicative') items = items.filter(item => item.valuation.status === 'indicative' && !item.state.dismissed);
+    else if (view === 'indicative') items = items.filter(item => indicative(item) && !item.state.dismissed);
     else if (view !== 'history') items = items.filter((item) => !needsReview(item) && !item.state.dismissed);
     if (view === 'components') items = items.filter(item => item.valuation.componentOpportunity);
+    if (view === 'retail') items = items.filter(item => item.valuation.depreciatedRetail?.opportunity);
     const district = params.get('district'); if (district) items = items.filter((item) => item.district === district);
     const maxPrice = Number(params.get('maxPrice'));
     if (maxPrice > 0) items = items.filter(item => item.price <= maxPrice);
     if (params.get('opportunities') === 'true') items = items.filter((item) => item.valuation.opportunity);
     const sort = params.get('sort');
     items.sort(sort === 'price' ? (a,b) => a.price-b.price : sort === 'newest' ? (a,b) => b.observedAt.localeCompare(a.observedAt)
+      : view === 'retail' ? (a,b) => (b.valuation.depreciatedRetail?.discountPercent ?? -1000)-(a.valuation.depreciatedRetail?.discountPercent ?? -1000) || a.price-b.price
       : (a,b) => Number(b.valuation.opportunity) - Number(a.valuation.opportunity)
         || (b.valuation.discountPercent ?? -1000) - (a.valuation.discountPercent ?? -1000) || a.price-b.price);
     // Public coverage describes retained market observations, never the private collection log.
@@ -281,20 +289,31 @@ export class FlipperService {
   deploymentStatus(): { busy: boolean } { return { busy: !!this.active || this.aiProbeRunning || !!this.priceAbort }; }
   /** Background cache maintenance uses no Chợ Tốt or AI requests. Public reads remain offline. */
   refreshPriceCache(): Promise<void> {
-    if (!this.prices || this.stopping || this.deploymentStatus().busy || this.store.deploymentMaintenanceActive()
+    if ((!this.prices && !this.partsPrices) || this.stopping || this.deploymentStatus().busy || this.store.deploymentMaintenanceActive()
       || this.now().valueOf() < this.nextPriceRefresh) return Promise.resolve();
     this.priceAbort = new AbortController();
     const signal = AbortSignal.any([this.priceAbort.signal,AbortSignal.timeout(120_000)]);
     const work = async () => {
       try {
-        const profiles = new Map<string,HardwareProfile>();
-        for (const row of this.store.marketListings('laptop')) {
-          const a = this.prepared(row).assessment, profile = this.retailProfile(row.raw, a);
-          if (a.eligibility !== 'excluded' && profile.model) profiles.set(JSON.stringify(profile),profile);
+        const profiles = new Map<string,{category:Category;checkedAt:string;warm:()=>Promise<void>}>();
+        for (const category of ['laptop','gpu','desktop'] as const) for (const row of this.store.marketListings(category)) {
+          const a = this.prepared(row).assessment;
+          if (a.eligibility === 'excluded' || sourceUnavailable(row.raw)) continue;
+          if (category === 'laptop' && this.prices) {
+            const profile = this.retailProfile(row.raw,a);
+            if (profile.model) profiles.set(`laptop:${JSON.stringify(profile)}`,{category,checkedAt:this.prices.lookup(profile)?.checkedAt ?? '',warm:() => this.prices!.warm(profile,signal)});
+          } else if (this.partsPrices?.canLookup(a)) {
+            profiles.set(`${category}:${JSON.stringify(a.profile)}`,{category,checkedAt:this.partsPrices.checkedAt(a),warm:() => this.partsPrices!.warm(a,signal)});
+          }
         }
-        const selected = [...profiles.values()].sort((a,b) =>
-          (this.prices!.lookup(a)?.checkedAt ?? '').localeCompare(this.prices!.lookup(b)?.checkedAt ?? '')).slice(0,12);
-        await concurrent(selected,2,p => this.prices!.warm(p,signal));
+        // Share the twelve-configuration bound across categories so new part lookups cannot starve behind laptops.
+        const ordered = [...profiles.values()].sort((a,b) => a.checkedAt.localeCompare(b.checkedAt));
+        const queues = (['gpu','desktop','laptop'] as const).map(category => ordered.filter(p => p.category === category));
+        const selected: typeof ordered = [];
+        while (selected.length < 12 && queues.some(q => q.length)) for (const queue of queues) {
+          if (queue.length && selected.length < 12) selected.push(queue.shift()!);
+        }
+        await concurrent(selected,2,p => p.warm());
       } catch { /* Each provider retains its own failure state; retry on the next maintenance tick. */ }
       finally { this.nextPriceRefresh = this.now().valueOf()+15*60_000; this.priceAbort = null; this.store.notifyActivity(); }
     };
@@ -723,6 +742,9 @@ export class FlipperService {
       const updated = this.store.putListing(raw, assessment, listing.local); context.job.assessed = 1;
       context.progress.raws = [raw]; context.progress.assessedIds = [raw.id];
       this.checkpoint(context);
+      if (['desktop','gpu'].includes(assessment.kind) && assessment.eligibility !== 'excluded' && !sourceUnavailable(raw)) {
+        await this.partsPrices?.warm(this.prepared(updated).assessment,context.abort.signal);
+      }
       if (this.comparable(raw, assessment)) {
         context.job.status = 'comparing'; context.job.message = assessment.kind === 'laptop' && isMacBookListing(raw) ? 'Checking new retail and original launch prices'
           : assessment.kind === 'laptop' ? 'Retrieving same-parts laptops across Vietnam and new retail prices' : 'Retrieving focused nationwide price evidence';
@@ -878,6 +900,9 @@ export class FlipperService {
     verified.sort((a,b) => order.get(a.raw.id)! - order.get(b.raw.id)!);
     if (!verified.length) return;
     const target = verified[0]!, kind = target.assessment.kind;
+    if (kind === 'desktop' || kind === 'gpu') {
+      await this.parallel(context,verified,member => this.partsPrices?.warm(member.assessment,context.abort.signal) ?? Promise.resolve());
+    }
     if (kind === 'laptop') {
       // Retail and launch prices are read when a listing is shown; the stored reference is the same-parts average.
       for (const member of verified) {

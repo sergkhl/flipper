@@ -11,6 +11,9 @@ retail/original launch evidence for MacBooks. Prices and price budgets use VND. 
 reference evidence using current rates cached for seven days; failed rate
 refreshes retain stale indicative estimates without deal badges. Native VND
 valuations do not depend on exchange rates. AI costs remain in USD.
+GPUs and desktops also have a separate depreciated retail estimate: the lowest
+verified current new part prices reduced by 25%. Desktop estimates cover supported
+CPU, GPU, RAM and SSD only and explicitly omit the rest of the system.
 The app supports category browsing, model searches, saved searches, and manual
 refresh, with LiteLLM-assisted classification and interpretation. Chat uses the
 exact gateway route `xiaomi_mimo/mimo-v2.6-flash`; the dedicated OpenRouter
@@ -187,6 +190,19 @@ at least five independent matching nationwide offers.
 An asking price meeting the discount threshold against a partial component
 baseline. It has a separate label and filter and does not count as a
 below-market find or a resale opportunity.
+
+**Depreciated retail estimate**:
+The lowest verified current factory-new Vietnamese cash price multiplied by 75%.
+The fixed 25% reduction is a policy assumption, separate from model-age
+depreciation of original laptop launch prices and observed used-market values.
+For desktops, sum only supported CPU, GPU, RAM and SSD estimates and list omitted
+parts. Incomplete specifications give indicative ranges without deal badges.
+See ADR 0014 for matching and source rules.
+
+**Below depreciated estimate**:
+A current, eligible used GPU or desktop whose asking price is strictly below its
+supported depreciated retail or partial component estimate. It has its own badge
+and filter and does not establish a below-market price or resale opportunity.
 
 **Cost reserve**:
 Legacy stored allowance for transport, preparation and other purchase/resale costs.

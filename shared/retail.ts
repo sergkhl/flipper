@@ -2,6 +2,7 @@ import type { HardwareProfile } from './types.ts';
 
 export const PRICE_CACHE_MS = 7 * 86_400_000;
 export type LaptopClass = 'apple_silicon' | 'business' | 'consumer';
+export type RetailPartKind = 'cpu' | 'gpu' | 'ram' | 'ssd';
 export interface FxSnapshot {
   base: 'USD'; fetchedAt: string; date: string; rates: Record<string, number>; sourceUrl: string;
 }
@@ -41,6 +42,34 @@ export interface LaptopPriceEvidence {
 export interface RetailLookup {
   checkedAt: string; status: 'complete' | 'failed'; offers: RetailPrice[]; errors: string[];
   checkedUrls?: string[];
+}
+
+export interface DepreciatedPart {
+  kind: RetailPartKind;
+  label: string;
+  quantity: number;
+  newPriceVnd: number;
+  estimateVnd: number;
+  rangeVnd: [number, number];
+  indicative: boolean;
+  reasons: string[];
+  sources: RetailPrice[];
+}
+
+/** Independent of a used-market reference: current new prices with a fixed used-condition reduction. */
+export interface DepreciatedRetailEstimate {
+  policyVersion: number;
+  status: 'valued' | 'indicative' | 'unavailable';
+  label: string;
+  retention: number;
+  newTotalVnd: number | null;
+  estimateVnd: number | null;
+  rangeVnd: [number, number] | null;
+  discountPercent: number | null;
+  opportunity: boolean;
+  components: DepreciatedPart[];
+  omitted: string[];
+  reason: string;
 }
 
 export function freshDate(value: string, now = Date.now(), ttl = PRICE_CACHE_MS): boolean {
