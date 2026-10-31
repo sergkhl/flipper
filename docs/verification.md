@@ -1,5 +1,34 @@
 # Verification
 
+Depreciated component retail validation on 31 October 2026: all **414 application
+tests**, all **10 release-policy tests**, TypeScript checking and the production
+Vite build passed with Node 26.12.0. New cases cover independent used/retail
+verdicts, the fixed 25% reduction, cheapest verified offers without a used-seller
+quorum, strict equality, GPU variants, RAM layout/ECC/speed uncertainty, SSD
+capacity classes/interfaces, omitted parts, eligibility and freshness gates,
+seven-day persistence/expiry, failure recovery, authoritative removal and
+cancellation without caching false absence. Adapter fixtures exercise all four
+shops, sub-million prices, RAM kits, negative ECC and CPU memory-controller
+capabilities. An HTTP test verifies the new public retail filter and redaction.
+
+Synthetic browser checks at 1440×1080 and 390×844 passed for separate used and
+depreciated comparisons, GPU/desktop badges, the retail filter, indicative
+estimates without badges, source links and omitted components, with no page
+errors or horizontal overflow. They used isolated synthetic data, with no live
+marketplace, AI or retailer requests.
+
+A separate bounded live component probe read public pages at the four reviewed
+retailers for RTX 5060 8 GB GDDR7, i5-12400F, 16 GB DDR4 and 512 GB-class NVMe SSD.
+The initial probe made 165 public HTTP requests and returned 16 GPU, 4 CPU, 18 RAM
+and 31 SSD offers before exact target matching. GPUs, RAM and SSDs included all
+four shops. Six additional requests rechecked the corrected CPU/ECC parsing:
+six CPU offers then covered all four shops, and the sampled negative ECC
+declaration correctly remained non-ECC.
+Truncation, unreadable pages and incompatible identities remained explicit
+failures. These counts describe sampled offers, not exhaustive coverage, verified
+condition of used hardware or successful future marketplace scans. No production
+database reset, Chợ Tốt requests, AI calls or paid APIs were used for this probe.
+
 Use Node.js 26 or newer with the locked dependencies:
 
 ```sh

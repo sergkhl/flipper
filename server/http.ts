@@ -182,7 +182,7 @@ export function appServer(service: FlipperService, dist = resolve('dist'), optio
       if (path === '/api/listings' && readRequest) {
         if (url.searchParams.has('priceCurrency') && url.searchParams.get('priceCurrency') !== 'VND') throw new HTTPError(400, 'Price filters use VND only');
         const category = parse(categorySchema, url.searchParams.get('category') ?? 'laptop');
-        if (url.searchParams.has('view')) parse(z.enum(['all', 'saved', 'review', 'history', 'indicative', 'components']), url.searchParams.get('view'));
+        if (url.searchParams.has('view')) parse(z.enum(['all', 'saved', 'review', 'history', 'indicative', 'components', 'retail']), url.searchParams.get('view'));
         for (const name of ['minRamGb', 'minVramGb']) if (url.searchParams.has(name)) {
           parse(z.string().trim().min(1).transform(Number).pipe(memoryMinimumSchema), url.searchParams.get(name));
         }

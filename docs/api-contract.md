@@ -99,7 +99,7 @@ imported when present; legacy in-memory manual history is unavailable.
 ### Existing workspace actions
 
 - `GET /api/bootstrap` → BootstrapResponse.
-- `GET /api/listings?category=laptop|desktop|gpu&q=...&district=...&view=all|saved|review|history|indicative|components&opportunities=true|false&maxPrice=...&minRamGb=...&minVramGb=...&includeUnknownMemory=true|false&sort=value|newest|price` → ListingsResponse. `maxPrice` is VND. Missing memory parameters use persistent settings defaults (initially RAM 16 GB, VRAM 8 GB, include unknown true). RAM applies only to computers. VRAM applies to standalone GPUs and included discrete graphics; integrated-only and explicitly GPU-free computers are exempt. Minimums are inclusive; zero disables a capacity threshold. The unknown-memory flag independently includes/excludes unknown applicable capacities, including with a zero threshold. Known below-minimum capacity always fails. The policy applies before view selection and statistics. Missing memory capacity alone may stay in the main feed when included, but other review reasons and price-evidence gates remain effective. Collection coverage and scanned count describe the unfiltered pool. Legacy `mode` does not change deal filtering, counts or ranking.
+- `GET /api/listings?category=laptop|desktop|gpu&q=...&district=...&view=all|saved|review|history|indicative|components|retail&opportunities=true|false&maxPrice=...&minRamGb=...&minVramGb=...&includeUnknownMemory=true|false&sort=value|newest|price` → ListingsResponse. `maxPrice` is VND. Missing memory parameters use persistent settings defaults (initially RAM 16 GB, VRAM 8 GB, include unknown true). RAM applies only to computers. VRAM applies to standalone GPUs and included discrete graphics; integrated-only and explicitly GPU-free computers are exempt. Minimums are inclusive; zero disables a capacity threshold. The unknown-memory flag independently includes/excludes unknown applicable capacities, including with a zero threshold. Known below-minimum capacity always fails. The policy applies before view selection and statistics. Missing memory capacity alone may stay in the main feed when included, but other review reasons and price-evidence gates remain effective. Collection coverage and scanned count describe the unfiltered pool. Legacy `mode` does not change deal filtering, counts or ranking.
 - `POST /api/refresh` with `{category, query?, limit?, minRamGb?, minVramGb?, includeUnknownMemory?}` → `{job: RefreshJob}`. Omitted memory parameters use settings defaults. Bounded detail/AI and comparison work prioritizes known matches, possible unknown matches, then known failures, with price ordering within groups. Source collection and nationwide reference pools retain their existing bounds and matching rules.
 - `GET /api/jobs/active` → `{job: RefreshJob|null}`.
 - `GET /api/deployment` → `{busy: boolean}`. Private activation readiness; active
@@ -158,7 +158,8 @@ to another value are rejected. `Valuation.opportunity` includes supported same-p
 laptop, laptop retail, MacBook depreciation and complete or component-adjusted whole-item references. `componentOpportunity`
 applies the same strict comparison to a partial component baseline and is excluded from
 market and resale opportunities. `view=components` selects these separate finds;
-`view=indicative` selects references that cannot support a firm verdict. Laptop
+`view=indicative` selects used references or independent depreciated retail estimates
+that cannot support a firm verdict. Laptop
 estimates may show a mathematical gap but never a deal badge. Statistics expose `componentOpportunities` and
 `indicative` separately. `evidenceIssue` identifies a missing, sparse, outdated,
 unavailable or ambiguous input for a specific UI explanation.
@@ -188,6 +189,18 @@ date and source URL); `fxStale` indicates that its seven-day lifetime has expire
 Failed rate refreshes retain those references as visibly stale indicative
 estimates, without deal badges. A missing usable rate leaves foreign evidence
 unpriced. Native VND references use `fx: null`, `fxStale: false` and remain usable.
+
+GPU and desktop responses additionally expose `valuation.depreciatedRetail`,
+independent of `reference`, `discountPercent`, `opportunity`, `componentOpportunity`
+and resale values. It contains `status` (`valued`, `indicative`, `unavailable`),
+`newTotalVnd`, `estimateVnd`, `rangeVnd`, its own `discountPercent` and `opportunity`,
+fixed `retention: 0.75`, policy version, component offers and explicit omissions.
+`view=retail` selects only these opportunities; `stats.retailOpportunities` reports
+their count. An indicative retail estimate is also discoverable in
+`view=indicative`, subject to memory, dismissal and price filters. A whole-item
+used-market opportunity never follows from this estimate. Public responses use
+the same cached public prices and never expose private state or trigger lookups.
+See ADR 0014 for matching, eligibility and the fixed 25% reduction.
 One verified retail source can
 support medium confidence; `minComparables` applies to same-parts laptop, GPU and
 desktop references. Evidence issues `retail_price` and

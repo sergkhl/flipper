@@ -56,16 +56,18 @@ import {
   usd,
 } from "./format";
 import ListingDrawer from "./ListingDrawer";
+import DepreciatedRetail from './DepreciatedRetail';
 import SettingsDrawer from "./SettingsDrawer";
 import Runs from "./Runs";
 import { useRunActivity } from './run-activity';
 import { ActivityConnection } from './RunStatus';
 import { hasDedicatedVram, hasMemoryTypeEstimates, hasTechApiMemoryData, memoryDescription, ramMinimums, vramMinimums } from "./memory";
 
-type View = "all" | "saved" | "review" | "history" | "indicative" | "components";
+type View = "all" | "saved" | "review" | "history" | "indicative" | "components" | "retail";
 const viewLabels: Record<Exclude<View, 'all'>, string> = {
   saved: 'Shortlist', review: 'Review queue', history: 'Historical observations',
   indicative: 'Indicative comparisons', components: 'Below component value',
+  retail: 'Below depreciated estimates',
 };
 const icons = { laptop: Laptop, desktop: Monitor, gpu: Cpu };
 const categories: Category[] = ["laptop", "desktop", "gpu"];
@@ -623,6 +625,7 @@ export default function App() {
                     : view === "history" ? "Previously observed hardware."
                     : view === "indicative" ? "Early price comparisons."
                     : view === "components" ? "Below component value."
+                    : view === "retail" ? "Below depreciated estimates."
                     : "Good hardware. Better prices."}
               </h1>
               <p>
@@ -633,6 +636,7 @@ export default function App() {
                     : view === "history" ? "Retained observations outside the latest successful collection. Dates show when each price was retrieved; availability needs checking."
                     : view === "indicative" ? "These estimates need stronger source, configuration, or freshness evidence before they can qualify as good prices."
                     : view === "components" ? "The asking price is below the supported value of identified parts. Omitted parts remain unpriced."
+                    : view === "retail" ? "Current new retail prices with a 25% reduction. Desktop totals cover only priced components; used-market comparisons remain separate."
                     : "Find used laptops, desktops, and GPUs from the latest successful collection."}
               </p>
             </div>
@@ -959,7 +963,7 @@ export default function App() {
                   className={`deal-filter ${opportunities ? "enabled" : ""}`}
                   onClick={() => setOpportunities(!opportunities)}
                   aria-pressed={opportunities}
-                  disabled={view === "components" || view === "indicative"}
+                  disabled={view === "components" || view === "indicative" || view === "retail"}
                 >
                   <span className="toggle-track">
                     <span />
@@ -990,6 +994,7 @@ export default function App() {
                     <option value="review">{canManage ? "Needs review & dismissed" : "Needs review"}</option>
                     <option value="indicative">Indicative comparisons ({stats?.indicative ?? 0})</option>
                     <option value="components">Below component value ({stats?.componentOpportunities ?? 0})</option>
+                    {category !== 'laptop' && <option value="retail">Below depreciated estimates ({stats?.retailOpportunities ?? 0})</option>}
                     <option value="history">Historical observations</option>
                   </select>
                   <ChevronDown size={12} />
@@ -1024,6 +1029,7 @@ export default function App() {
                 <p>
                   {view === "history" ? "Dated observations outside the current collection"
                     : view === "components" ? "Identified parts with supported prices; whole-PC value remains unpriced"
+                    : view === "retail" ? "Lowest verified new prices × 75% retained value; these are policy estimates"
                     : category === 'laptop' ? 'Used laptops compared with same-parts laptops across Vietnam; MacBooks with new retail or launch prices'
                     : "Local asking prices, with matching used offers across Vietnam"}
                 </p>
@@ -1080,6 +1086,7 @@ export default function App() {
                       : view === "history" ? "No historical observations match."
                       : view === "indicative" ? "No indicative comparisons match."
                       : view === "components" ? "No component-value finds match."
+                      : view === "retail" ? "No depreciated-estimate finds match."
                       : coverage
                         ? opportunities
                           ? "No verified price gaps yet."
@@ -1094,6 +1101,7 @@ export default function App() {
                       : view === "history" ? "Observations outside the latest successful collection appear here with their retrieval dates. Active filters also apply."
                       : view === "indicative" ? "Estimates with incomplete source, configuration, or freshness evidence appear here without a deal badge."
                       : view === "components" ? 'The asking price must be strictly below independently supported component values. Whole-PC value remains unpriced.'
+                      : view === "retail" ? 'Fresh, verified retail inputs and a current eligible asking price below the depreciated estimate are needed. Incomplete matches remain indicative.'
                       : coverage
                         ? opportunities
                           ? `A find needs a supported reference and an asking price strictly below it. ${canManage ? "Browse all items or collect more evidence." : "Try browsing all items."}`
@@ -1467,6 +1475,7 @@ function ListingCard({
             </div>
           </div>
         )}
+        {valuation.depreciatedRetail && <DepreciatedRetail estimate={valuation.depreciatedRetail} compact />}
         {missingDetails.length > 0 && (
           <button className="listing-missing-details" onClick={onOpen}>
             <Info size={14} />

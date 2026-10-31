@@ -1,4 +1,4 @@
-import type { LaptopPriceEvidence } from './retail.ts';
+import type { DepreciatedRetailEstimate, LaptopPriceEvidence } from './retail.ts';
 export type Category = 'laptop' | 'desktop' | 'gpu';
 export type HardwareKind = Category | 'ram' | 'cpu' | 'ssd' | 'other' | 'wanted';
 export type Condition = 'used' | 'new' | 'repaired' | 'unknown';
@@ -185,6 +185,7 @@ export interface Valuation {
   reference: ReferencePrice | null;
   /** Other evidence shown for context, such as retail or launch prices beside a same-parts laptop average. */
   alternatives?: ReferencePrice[];
+  depreciatedRetail?: DepreciatedRetailEstimate;
   discountPercent: number | null;
   profit: number | null;
   roiPercent: number | null;
@@ -319,7 +320,7 @@ export interface RunActivity {
 export interface ListingsResponse {
   items: ListingView[];
   total: number;
-  stats: { scanned: number; benchmarked: number; opportunities: number; componentOpportunities: number; indicative: number; saved: number; excluded: number; };
+  stats: { scanned: number; benchmarked: number; opportunities: number; componentOpportunities: number; retailOpportunities: number; indicative: number; saved: number; excluded: number; };
   districts: string[];
   coverage: Coverage | null;
   job: RefreshJob | null;

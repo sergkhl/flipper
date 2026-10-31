@@ -33,10 +33,10 @@ The implemented free sources are:
 
 | Source | Use | Evidence boundary |
 | --- | --- | --- |
-| [HACOM catalog](https://hacom.vn/sitemap.xml) and product pages | Discover matching laptops, then read JSON-LD Product/Offer data | Factory-new, in-stock cash offers whose structured price is shown on the page, for the exact configuration. Product pages state "Giá đã bao gồm VAT". Items marked pre-order ("Hàng đặt trước", "Order trước – giao sau") are not current stock. Sitemap coverage and a twelve-product bound limit the checked universe. |
+| [HACOM catalog](https://hacom.vn/sitemap.xml) and product pages | Discover matching laptops and components, then read JSON-LD Product/Offer data | Factory-new, in-stock cash offers whose structured price is shown on the page, for the matched hardware. Product pages state "Giá đã bao gồm VAT". Items marked pre-order ("Hàng đặt trước", "Order trước – giao sau") are not current stock. Sitemap coverage and a twelve-product bound limit the checked universe. |
 | [An Phát](https://www.anphatpc.com.vn/) public search and product pages | A second retail lookup | Product pages state "Giá đã có VAT". Every page checked on 26 October 2026 published a past `priceValidUntil` timestamp and some showed 1 VND as in stock, so validity dates are ignored and placeholder amounts are skipped. A failed or truncated search cannot establish absence. |
-| [Phong Vũ laptop sitemap](https://phongvu.vn/sitemap-collection-products-4-laptop.xml) and product pages | Discover laptops and MacBooks | Its [terms of sale](https://help.phongvu.vn/chinh-sach-ban-hang/dieu-kien-giao-dich) (§3.1) state listed prices include VAT and exclude delivery. Search pages are disallowed by robots.txt. Clearance and demo pages are excluded, and display units can be marked new and in stock, so their titles and addresses are excluded too. |
-| [TNC product sitemap](https://www.tnc.com.vn/sitemaps/sitemap_product.xml) and product pages | Discover laptops and MacBooks | The single sitemap is about 6.4 MB; only laptop and MacBook pages are kept. Product pages state prices include VAT. Validity dates are same-day templates, and older models' pages can show 0 VND, which is not a price. |
+| [Phong Vũ laptop sitemap](https://phongvu.vn/sitemap-collection-products-4-laptop.xml), [component sitemap index](https://phongvu.vn/sitemap-collection-products.xml) and product pages | Discover laptops, MacBooks and components | Its [terms of sale](https://help.phongvu.vn/chinh-sach-ban-hang/dieu-kien-giao-dich) (§3.1) state listed prices include VAT and exclude delivery. Search pages are disallowed by robots.txt. Clearance and demo pages are excluded, and display units can be marked new and in stock, so their titles and addresses are excluded too. |
+| [TNC product sitemap](https://www.tnc.com.vn/sitemaps/sitemap_product.xml) and product pages | Discover laptops, MacBooks and components | The single sitemap is about 6.4 MB; matching hardware pages are selected before product reads. Product pages state prices include VAT. Validity dates are same-day templates, and older models' pages can show 0 VND, which is not a price. |
 | [Frankfurter v2](https://frankfurter.dev/) | Current rates for converting foreign reference prices into VND | No API key. Preserve rate date and fetch date; reject unsupported or already-stale provider rows when fetching. Retain previously verified snapshots for stale indicative estimates if refresh fails. |
 | [FPT M1 launch retail report](https://fptshop.com.vn/tin-tuc/tin-khuyen-mai/fpt-shop-ve-day-ke-macbook-m1-mua-ngay-khong-can-cho-doi-130379) | Reviewed original Vietnamese prices | Air/Pro 13-inch M1, 8 GB RAM, 256/512 GB storage. Prices offered on 8 January 2021, within 90 days of release. |
 | [Apple release announcement](https://www.apple.com/newsroom/2020/11/introducing-the-next-generation-of-mac/) and [dated configuration list](https://www.apple.com/education/pricelists/pdfs/Apple_US_Education_Institution_Price_List-11-10-2020.pdf) | Release/order date and original base configurations | The education list supplies specifications only; its restricted education prices are not retail evidence. |
@@ -96,6 +96,25 @@ FX dependency. Foreign references are recalculated when rates refresh. Expired
 snapshots remain available for explicitly stale estimates without deal badges.
 The lowest **verified** price means the lowest eligible offer in checked sources,
 not a claim to exhaustive market coverage. See ADR 0012 for fallback/FX policy.
+
+## GPU and desktop component retail
+
+The same four reviewed Vietnamese shops supply current component offers. HACOM's
+product sitemaps and TNC's product sitemap now also discover GPU, CPU, RAM and SSD
+pages. Phong Vũ's collection-product sitemap index locates component maps; an
+unreadable or blocked index remains a source failure. An Phát uses bounded public
+part searches. Read at most twelve candidate product pages per shop and query,
+excluding complete-PC and accessory pages. Part parsing and caches are separate
+from laptops, with a VND 50,000 minimum to reject placeholder prices without
+discarding legitimate sub-million component offers.
+
+Accept shown structured factory-new in-stock cash prices with reviewed VAT
+evidence; reject pre-orders, discontinued/used products, bundle-only purchases and
+unverified identities. Domestic delivery is not added. A verified offer can remain
+usable when another source fails; the minimum means the lowest eligible price in
+checked sources, not exhaustive coverage. Prices and discovery cache for seven
+days, failures for fifteen minutes. No paid API, AI pricing or marketplace proxy
+is involved. ADR 0014 defines the separate 25% reduction and matching policy.
 
 ## Same-parts laptop part values
 

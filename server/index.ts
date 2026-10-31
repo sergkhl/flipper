@@ -8,6 +8,8 @@ import { TechAPICache } from './techapi.ts';
 import { serverHost, serverOptions, validateServerAccess } from './access.ts';
 import { DailyScanner } from './scheduler.ts';
 import { LaptopPriceBook } from './laptop-price-book.ts';
+import { PartsPriceBook } from './parts-retail.ts';
+import { PublicRetailSources } from './retail-sources.ts';
 
 if (existsSync('.env')) loadEnvFile('.env');
 const options = serverOptions(), access = validateServerAccess(options), host = serverHost(access);
@@ -15,8 +17,9 @@ const port = Number(process.env.PORT ?? 4317);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('PORT must be an integer between 1024 and 65535');
 const dataDirectory = resolve(process.env.FLIPPER_DATA_DIR ?? '.data');
 const store = new Store(dataDirectory);
+const retailSources = new PublicRetailSources(store);
 const service = new FlipperService(store, undefined, new TechAPICache(dataDirectory),undefined,
-  new LaptopPriceBook(store));
+  new LaptopPriceBook(store,retailSources),new PartsPriceBook(store,retailSources));
 const pricesTimer = setInterval(() => { void service.refreshPriceCache(); },60_000);
 pricesTimer.unref();
 const scanner = new DailyScanner(service);

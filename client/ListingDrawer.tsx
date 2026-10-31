@@ -22,6 +22,7 @@ import type {
   ReferencePrice,
 } from "../shared/types";
 import Drawer from "./Drawer";
+import DepreciatedRetail from './DepreciatedRetail';
 import { message } from "./api";
 import { date, money, originalMoney, safeSourceUrl } from "./format";
 import { evidenceLabel } from "./valuation";
@@ -308,6 +309,10 @@ export default function ListingDrawer({
             )}
           </section>
 
+          {item.valuation.depreciatedRetail && <section className="detail-section">
+            <div className="section-heading"><h3>{item.valuation.depreciatedRetail.label}</h3><span className="badge">25% reduction</span></div>
+            <DepreciatedRetail estimate={item.valuation.depreciatedRetail} />
+          </section>}
           <section className="detail-section">
             <div className="section-heading">
               <h3>Specification check</h3>
