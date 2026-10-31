@@ -52,6 +52,102 @@ test('catalog outages retain last-good entries without repeating downloads on ea
   } finally { await pool.close(); store.close(); }
 });
 
+for (const failure of ['connection', 'http', 'deadline'] as const) test(`a ${failure} failure at one check website does not reject a working proxy`, async t => {
+  if (failure === 'deadline') t.mock.timers.enable({ apis: ['setTimeout'] });
+  const store = new Store('', true), targets: string[] = [];
+  let started!: () => void;
+  const waiting = new Promise<void>(resolve => { started = resolve; });
+  const pool = new ProxyPool(store, { download: async () => new Response(proxies[0]), send: async (_uri, url, init) => {
+    targets.push(url);
+    if (new URL(url).hostname === 'example.com') {
+      if (failure === 'connection') throw new TypeError('Website unavailable');
+      if (failure === 'http') return new Response('', { status: 503 });
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true }); started();
+      });
+    }
+    return new Response(null, { status: 204 });
+  } });
+  try {
+    const routes = pool.routes(1);
+    if (failure === 'deadline') { await waiting; t.mock.timers.tick(4_000); }
+    assert.deepEqual(await routes, [proxies[0]]);
+    assert.equal(new Set(targets.map(url => new URL(url).hostname)).size, 2);
+    assert.equal(pool.status().verified, 1); assert.equal(pool.status().available, 1);
+    assert.equal(store.sourceBudgetStatus().used, 0);
+  } finally { await pool.close(); store.close(); }
+});
+
+test('caller cancellation stops fallback checks without retiring candidates', async () => {
+  const store = new Store('', true), abort = new AbortController(); let sent = 0;
+  const pool = new ProxyPool(store, { download: async () => new Response(proxies[0]), send: async () => {
+    sent++; abort.abort(); throw abort.signal.reason;
+  } });
+  try {
+    await assert.rejects(pool.routes(1, [], abort.signal), { name: 'AbortError' });
+    assert.equal(sent, 1); assert.equal(pool.status().available, 1); assert.equal(pool.status().verified, 0);
+  } finally { await pool.close(); store.close(); }
+});
+
+test('outages of all check websites retain the twelve-candidate job bound and cool down only tested candidates', async () => {
+  const store = new Store('', true), checked = new Set<string>(); let sent = 0;
+  const candidates = Array.from({ length: 40 }, (_, i) => `http://8.8.1.${i + 1}:8080`);
+  const pool = new ProxyPool(store, { download: async () => new Response(candidates.join('\n')), send: async (uri) => {
+    checked.add(uri); sent++; return new Response('', { status: 503 });
+  } });
+  try {
+    assert.deepEqual(await pool.routes(4), []);
+    assert.equal(checked.size, 12); assert.equal(sent, 24);
+    assert.equal(pool.status().available, 28); assert.equal(pool.status().verified, 0);
+    assert.deepEqual(await pool.routes(4), []); assert.equal(sent, 24);
+    assert.equal(store.sourceBudgetStatus().used, 0);
+  } finally { await pool.close(); store.close(); }
+});
+
+test('a successful first check avoids another website request', async () => {
+  const store = new Store('', true); let sent = 0;
+  const pool = new ProxyPool(store, { download: async () => new Response(proxies[0]), send: async () => {
+    sent++; return new Response(null, { status: 204 });
+  } });
+  try {
+    assert.deepEqual(await pool.routes(1), [proxies[0]]); assert.equal(sent, 1);
+    assert.equal(store.sourceBudgetStatus().used, 0);
+  } finally { await pool.close(); store.close(); }
+});
+
+test('two stalled check websites share an eight-second candidate bound', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const store = new Store('', true); let sent = 0;
+  const starts: Array<() => void> = [];
+  const ready = [0, 1].map(() => new Promise<void>(resolve => { starts.push(resolve); }));
+  const pool = new ProxyPool(store, { download: async () => new Response(proxies[0]), send: async (_uri, _url, init) => {
+    const index = sent++;
+    return new Promise<Response>((_resolve, reject) => {
+      init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true }); starts[index]!();
+    });
+  } });
+  try {
+    const routes = pool.routes(1);
+    for (const start of ready) { await start; t.mock.timers.tick(4_000); }
+    assert.deepEqual(await routes, []); assert.equal(sent, 2); assert.equal(pool.status().available, 0);
+    assert.equal(store.sourceBudgetStatus().used, 0);
+  } finally { await pool.close(); store.close(); }
+});
+
+test('one unavailable catalog does not prevent collection through the other provider', async () => {
+  const store = new Store('', true); let sent = 0;
+  const pool = new ProxyPool(store, { probe: async () => true, download: async url => {
+    if (String(url) === PROXY_SOURCES[0]) throw new Error('Catalog unavailable');
+    return new Response(proxies[0]);
+  }, send: async () => { sent++; return new Response(page); } });
+  const client = new ChototClient({ pauseMs: 0, requestStore: store, proxies: pool });
+  client.beginJob({ id: 'one-catalog', category: 'gpu', automatic: false, onRequest() {} });
+  try {
+    assert.deepEqual(await client.search(input), { items: [], total: 0 });
+    assert.equal(sent, 1); assert.equal(store.sourceBudgetStatus().used, 1);
+  } finally { await client.close(); store.close(); }
+});
+
 test('empty catalogs pause without making any marketplace request or falling back directly', async () => {
   const store = new Store('', true); let direct = 0, sent = 0;
   const pool = new ProxyPool(store, { probe: async () => true, download: async () => new Response('http://127.0.0.1:80'), send: async () => { sent++; return new Response(page); } });

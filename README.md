@@ -164,7 +164,9 @@ comparisons available, with assessment status shown.
 - Each category receives at most one fresh scheduled allowance per Vietnam date.
 - Source cooldowns persist across restarts. Marketplace requests wait until the
   deadline, and an eligible daily category is not claimed during that pause.
-- A full refresh stopped by a source cooldown is queued for automatic recovery.
+- When a source cooldown, request allowance or unavailable proxies pause marketplace
+  access, collected listing assessments, reachable retailers and sufficient cached
+  comparisons continue before unfinished work is queued for automatic recovery.
   Retry costs include prior attempts and unknown charges against the original
   allowance. A matching due daily category shares that job, avoiding duplicate
   scans. A repeated cooldown extends the wait without resetting the budget.

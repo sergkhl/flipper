@@ -145,10 +145,15 @@ across routes. Unavailable proxies queue work without a direct fallback.
 Catalog downloads, LiteLLM and administrator traffic do not use these proxies.
 Downloaded lists and cached endpoint/health state remain private runtime data.
 Four workers by default retain distinct proxy IPs, each with at least three seconds
-between request starts. Bounded HTTPS checks select routes; their success does
-not establish marketplace access. Fewer working routes reduce concurrency rather
-than stopping healthy workers. AI processing defaults to four separate direct
+between request starts. Bounded HTTPS checks select routes, trying Google's
+`www.gstatic.com/generate_204` if `example.com` fails. Either successful check
+qualifies the route; each gets four seconds within an eight-second candidate bound.
+Their success does not establish marketplace access. Fewer working routes reduce
+concurrency rather than stopping healthy workers. AI processing defaults to four separate direct
 gateway slots and the original shared job budget. Both worker limits are
 independently configurable from 1 to 20. A job checks at most twelve new proxy
 candidates, so larger marketplace pools also depend on cached verified routes.
-See ADRs 0010 and 0011.
+When marketplace access pauses, collected listings, reachable retailers and cached
+comparisons continue before unfinished work enters recovery. Recovery preserves
+pending detail reads, original observations and spending; the public collection
+changes only after the complete refresh succeeds. See ADRs 0010 and 0011.
