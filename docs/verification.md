@@ -1,5 +1,21 @@
 # Verification
 
+Source failure isolation validation on 31 October 2026: all **430 application
+tests**, all **10 release-policy tests**, TypeScript checking and the production
+Vite build passed with Node 26.12.0. Regression cases cover independent HTTPS
+proxy checks after connection, HTTP and timeout failures; the eight-second
+candidate deadline and twelve-candidate job limit; one unavailable proxy catalog;
+partial collection during proxy, request-allowance and source-cooldown pauses;
+continued assessments, retail lookups and sufficient cached comparisons; durable
+pending detail reads; restart recovery without repeated completed work or AI
+charges; cancellation and source-cooldown precedence. Partial work does not
+replace the previous successful public collection.
+
+A separate read-only connectivity check returned HTTP 204 from the fallback
+website through one recently verified production proxy. It made no marketplace
+or AI requests and did not change production proxy health, data or deployed code.
+This sampled connectivity does not establish future marketplace availability.
+
 Depreciated component retail validation on 31 October 2026: all **414 application
 tests**, all **10 release-policy tests**, TypeScript checking and the production
 Vite build passed with Node 26.12.0. New cases cover independent used/retail
@@ -158,8 +174,10 @@ global 429 dispatch blocking while started responses drain, three failed workers
 with one continuing route, a twelve-candidate HTTPS-probe ceiling, four shared
 AI slots without overspending, concurrent configuration queries, shared-query
 pagination without duplicate pages, and cancellation with a durable completed
-configuration checkpoint. Source/provider failures stop new work while preserving
-results from already-started calls. Tests use mocked routes and providers; real
+configuration checkpoint. Marketplace pauses stop new marketplace requests while
+collected listing assessments, reachable retailers and sufficient cached comparisons
+continue. Fatal errors and cancellation stop new work; all started calls drain
+before finalization. Tests use mocked routes and providers; real
 performance and proxy health must be reported separately.
 
 Run-control tests cover durable manual failures, cancellation and explicit resume,

@@ -8,6 +8,8 @@ export const PROXY_SOURCES = [
   'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt',
   'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt',
 ] as const;
+const CHECK_URLS = ['https://example.com/', 'https://www.gstatic.com/generate_204'] as const;
+const CHECK_TIMEOUT_MS = 4_000;
 const CACHE_MS = 30 * 60_000;
 const FAILURE_MS = 15 * 60_000;
 const RETRY_MS = 5 * 60_000;
@@ -57,9 +59,20 @@ export class ProxyPool {
         signal: init.signal, dispatcher: agent }) as unknown as Response;
     });
     this.probe = options.probe ?? (async (uri, signal) => {
-      const response = await this.send(uri, 'https://example.com/', { signal: signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(8_000)]) : AbortSignal.timeout(8_000) });
-      const okay = response.ok; await response.body?.cancel(); return okay;
+      // A check website's outage says nothing about the proxy's other destinations.
+      // Two independent targets share the previous eight-second candidate bound.
+      for (const url of CHECK_URLS) {
+        signal?.throwIfAborted();
+        const deadline = new AbortController();
+        const timer = setTimeout(() => deadline.abort(new DOMException('Proxy check timed out', 'TimeoutError')), CHECK_TIMEOUT_MS);
+        try {
+          const response = await this.send(uri, url, { signal: signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal });
+          const okay = response.ok; await response.body?.cancel();
+          if (okay) return true;
+        } catch { signal?.throwIfAborted(); }
+        finally { clearTimeout(timer); }
+      }
+      return false;
     });
   }
   beginJob(): void { this.probesRemaining = 12; }

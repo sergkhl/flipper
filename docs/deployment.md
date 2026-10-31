@@ -126,7 +126,13 @@ fixed GitHub providers described in ADR 0009. Marketplace requests use HTTPS wit
 certificate verification, four independently paced workers by default (configurable
 from 1 to 20) with stable distinct proxy IPs, and connection-only failover;
 there is no direct fallback. LiteLLM and administrator credentials stay outside
-these routes. Existing source cooldowns retain precedence over proxy switching.
+these routes. Proxy checks use two independent HTTPS websites, with at most
+twelve new candidates checked per job. Existing source cooldowns retain precedence
+over proxy switching. A marketplace pause stops further marketplace dispatch,
+while collected listing assessments, reachable retailers and sufficient cached
+comparisons finish within the existing bounds. Only then does unfinished work
+enter recovery, retaining selected pending detail reads and the original spending.
+The previous successful collection remains published until the full run succeeds.
 
 For a finalized failed refresh made before durable recovery was available, the
 private `POST /admin/api/scan-retries` accepts its `job` snapshot, original

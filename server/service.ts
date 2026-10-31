@@ -31,8 +31,12 @@ const MAX_CONSECUTIVE_AI_FAILURES = 3;
 type Source = Pick<ChototClient, 'search' | 'detail'> & Partial<Pick<ChototClient, 'beginJob' | 'endJob' | 'proxyStatus' | 'close'>>;
 type MemoryCatalog = MemoryTypeLookup & { warm?(parts: MemoryPartRequest[], signal?: AbortSignal): Promise<void>;
   warmLaptops?(parts: LaptopSpecRequest[], signal?: AbortSignal): Promise<void> };
+type MarketplacePause = SourceCooldownError | SourceDeferredError;
+function isMarketplacePause(error: unknown): error is MarketplacePause {
+  return error instanceof SourceCooldownError || error instanceof SourceDeferredError;
+}
 interface MemoryFilters { minRamGb: number; minVramGb: number; includeUnknownMemory: boolean; }
-interface JobContext { job: RefreshJob; abort: AbortController; budget: RefreshBudget; settings: AppSettings; ai: LiteLLMClient | null; aiStopped: boolean; aiFailures: number; memory: MemoryFilters; pools: Map<string, AssessedListing[]>; automatic: boolean; progress: RefreshProgress; aiGate: WorkPool; poolLocks: KeyedWork; assessments: Map<string, Promise<Assessment>>; stopped?: unknown; listingId?: string; scheduledDay?: string; retryId?: string; }
+interface JobContext { job: RefreshJob; abort: AbortController; budget: RefreshBudget; settings: AppSettings; ai: LiteLLMClient | null; aiStopped: boolean; aiFailures: number; memory: MemoryFilters; pools: Map<string, AssessedListing[]>; automatic: boolean; progress: RefreshProgress; aiGate: WorkPool; poolLocks: KeyedWork; assessments: Map<string, Promise<Assessment>>; stopped?: unknown; marketplacePause?: MarketplacePause; marketplaceStage?: StoredRun['stage']; listingId?: string; scheduledDay?: string; retryId?: string; }
 
 function applicableMemory(category: Category, profile: HardwareProfile, filters: MemoryFilters): Array<{ capacity: number | null; minimum: number }> {
   const fields = category === 'gpu' ? [] : [{ capacity: profile.ramGb, minimum: filters.minRamGb }];
@@ -515,7 +519,45 @@ export class FlipperService {
     context.abort.signal.throwIfAborted(); if (context.stopped) throw context.stopped;
   }
   private stopWork(context: JobContext, error: unknown): void {
-    if (!context.stopped || error instanceof SourceCooldownError) context.stopped = error;
+    if (!isMarketplacePause(error) && !context.stopped) context.stopped = error;
+  }
+  private pauseMarketplace(context: JobContext, error: MarketplacePause): void {
+    const previous = context.marketplacePause;
+    const priority = (issue: MarketplacePause) => issue instanceof SourceCooldownError ? 2 : issue.reason === 'request_budget' ? 1 : 0;
+    const until = (issue: MarketplacePause) => issue instanceof SourceCooldownError ? issue.cooldown.until : issue.until;
+    if (!previous || priority(error) > priority(previous)
+      || priority(error) === priority(previous) && Date.parse(until(error)) > Date.parse(until(previous))) {
+      context.marketplacePause = error;
+      context.marketplaceStage ??= context.job.status as StoredRun['stage'];
+    }
+  }
+  /** A marketplace pause blocks only marketplace requests; independent work can drain. */
+  private async marketplace<T>(context: JobContext, request: () => Promise<T>): Promise<T> {
+    this.checkWork(context);
+    if (context.marketplacePause) throw context.marketplacePause;
+    this.countRequest(context);
+    try { return await request(); }
+    catch (error) {
+      if (isMarketplacePause(error)) this.pauseMarketplace(context, error);
+      throw error;
+    }
+  }
+  private async continueOnMarketplacePause(context: JobContext, work: () => Promise<void>): Promise<boolean> {
+    try { await work(); return true; }
+    catch (error) {
+      this.checkWork(context);
+      if (!isMarketplacePause(error)) throw error;
+      return false;
+    }
+  }
+  private async warmPrices(listings: StoredListing[], context: JobContext): Promise<void> {
+    await this.parallel(context, listings, async listing => {
+      this.checkWork(context);
+      listing = this.prepared(listing);
+      if (listing.assessment.eligibility === 'excluded' || sourceUnavailable(listing.raw)) return;
+      if (listing.assessment.kind === 'laptop') await this.prices?.warm(this.retailProfile(listing.raw, listing.assessment), context.abort.signal);
+      else await this.partsPrices?.warm(listing.assessment, context.abort.signal);
+    });
   }
   private async parallel<T, R>(context: JobContext, items: readonly T[], work: (item: T, index: number) => Promise<R>): Promise<R[]> {
     // Each external pool enforces its own limit. Keep enough workflows available
@@ -535,7 +577,8 @@ export class FlipperService {
     const waiting = retry?.status === 'waiting';
     this.store.saveRun({ id: context.job.id, rootId: context.job.retryOf
       ? this.store.getRun(context.job.retryOf)?.rootId ?? context.job.retryOf : context.job.id,
-      stage: ['collecting', 'assessing', 'comparing'].includes(context.job.status)
+      stage: (waiting || context.job.status === 'waiting') && context.marketplaceStage ? context.marketplaceStage
+        : ['collecting', 'assessing', 'comparing'].includes(context.job.status)
         ? context.job.status as StoredRun['stage'] : this.store.getRun(context.job.id)?.stage,
       job: { ...context.job, ...(waiting ? { status: 'waiting', resumeAt: retry.dueAt } : {}) },
       state: waiting ? 'waiting' : context.job.status,
@@ -621,12 +664,11 @@ export class FlipperService {
         images: previous.images.length ? previous.images : raw.images, sellerType: previous.sellerType };
     }
     try {
-      this.countRequest(context);
-      const detail = await this.source.detail(raw, context.abort.signal);
+      const detail = await this.marketplace(context, () => this.source.detail(raw, context.abort.signal));
       detail.attributes._detailedAt = new Date().toISOString(); return detail;
     } catch (error) {
       if (context.abort.signal.aborted) throw error;
-      if (error instanceof SourceCooldownError || error instanceof SourceDeferredError) { this.stopWork(context, error); throw error; }
+      if (isMarketplacePause(error)) throw error;
       // A vanished listing is retained in history and cannot be presented as a fresh eligible candidate.
       if (/404|410/.test(error instanceof Error ? error.message : '')) return { ...raw, condition: 'unknown', attributes: { ...raw.attributes, _sourceUnavailable: true } };
       return { ...raw, attributes: { ...raw.attributes, _detailError: error instanceof Error ? error.message : 'Detail request failed' } };
@@ -655,8 +697,11 @@ export class FlipperService {
     try {
       let page = progress.nextPage;
       while (!progress.collected && gathered.size < job.target) {
-        this.checkWork(context); this.countRequest(context);
-        const result = await this.source.search({ kind: job.category, location: 'danang', query: job.query, page, signal: context.abort.signal });
+        this.checkWork(context);
+        let result: Awaited<ReturnType<Source['search']>>;
+        try {
+          result = await this.marketplace(context, () => this.source.search({ kind: job.category, location: 'danang', query: job.query, page, signal: context.abort.signal }));
+        } catch (error) { if (isMarketplacePause(error)) break; throw error; }
         job.totalAvailable = result.total; let added = 0;
         for (const raw of result.items) if (!gathered.has(raw.id) && gathered.size < job.target) { gathered.set(raw.id, raw); added++; }
         job.scanned = gathered.size; job.message = `Collected ${job.scanned} of up to ${job.target} local listings`;
@@ -666,7 +711,7 @@ export class FlipperService {
         if (!added || (result.total !== null ? page * 20 >= result.total : result.items.length < 20)) { progress.collected = true; break; }
         page++;
       }
-      progress.collected = true;
+      if (gathered.size >= job.target) progress.collected = true;
       job.status = 'assessing'; job.message = 'Checking listing types, condition and hardware specifications';
       this.checkpoint(context);
       // Spend bounded detail/AI work on known memory matches, then possible
@@ -674,16 +719,24 @@ export class FlipperService {
       const ordered = [...gathered.values()].map((raw) => ({ raw,
         priority: memoryPriority(job.category, this.memoryAssessment(raw, this.store.cachedAssessment(raw) ?? assessWithRules(raw)).profile, context.memory) }))
         .sort((a,b) => a.priority-b.priority || a.raw.price-b.raw.price).map(({ raw }) => raw);
-      await this.parallel(context, ordered.filter(raw => !progress.assessedIds.includes(raw.id)), async raw => {
+      const pendingDetails = new Set(progress.pendingDetailIds ?? []);
+      await this.parallel(context, ordered.filter(raw => !progress.assessedIds.includes(raw.id) || pendingDetails.has(raw.id)), async raw => {
         const rules = assessWithRules(raw);
-        if (!sourceUnavailable(raw) && rules.eligibility !== 'excluded' && progress.initialDetails < LOCAL_DETAIL_LIMIT) {
-          progress.initialDetails++;
-          raw = await this.enriched(raw, context);
+        if (!sourceUnavailable(raw) && rules.eligibility !== 'excluded' && (pendingDetails.has(raw.id) || progress.initialDetails < LOCAL_DETAIL_LIMIT)) {
+          if (!pendingDetails.has(raw.id)) { progress.initialDetails++; pendingDetails.add(raw.id); }
+          progress.pendingDetailIds = [...pendingDetails];
+          await this.continueOnMarketplacePause(context, async () => {
+            raw = await this.enriched(raw, context);
+            pendingDetails.delete(raw.id); progress.pendingDetailIds = [...pendingDetails];
+            progress.comparedIds = progress.comparedIds.filter(id => id !== raw.id);
+            job.benchmarked = progress.comparedIds.length;
+          });
         }
         gathered.set(raw.id, raw); progress.raws = [...gathered.values()];
         const assessment = await this.assessed(raw, context);
-        this.store.putListing(raw, assessment, true); job.assessed++;
-        progress.assessedIds.push(raw.id); this.checkpoint(context);
+        this.store.putListing(raw, assessment, true);
+        if (!progress.assessedIds.includes(raw.id)) progress.assessedIds.push(raw.id);
+        job.assessed = progress.assessedIds.length; this.checkpoint(context);
       });
       await this.warmMemory([...gathered.keys()].map(id => this.store.getListing(id)!.raw), context.abort.signal);
       job.status = 'comparing';
@@ -716,13 +769,19 @@ export class FlipperService {
       job.configurationsTotal = count; job.configurationsCompleted = completedConfigurations.size;
       job.message = `Comparing hardware configurations: ${job.configurationsCompleted} of ${count} complete`;
       this.checkpoint(context);
+      // Keep the existing cohort bound, but finish independent shop lookups even
+      // when a marketplace request in another configuration cannot proceed.
+      await this.warmPrices(selected.flatMap(([, members]) => members), context);
       await this.parallel(context, selected, async ([key, members]) => {
-        await this.benchmark(members, context);
+        if (!await this.continueOnMarketplacePause(context, () => this.benchmark(members, context))) return;
+        if (members.some(member => progress.pendingDetailIds?.includes(member.raw.id))) return;
         progress.comparedIds.push(...members.map(member => member.raw.id));
         if (!completedConfigurations.has(key)) { completedConfigurations.add(key); job.configurationsCompleted!++; }
         job.message = `Comparing hardware configurations: ${job.configurationsCompleted} of ${count} complete`;
         this.checkpoint(context);
       });
+      this.checkWork(context);
+      if (context.marketplacePause) throw context.marketplacePause;
       job.status = 'complete'; job.message = `Collected ${job.scanned} local listings; compared ${job.benchmarked} listings across ${count} configurations. Analyze any remaining listing individually.`;
       // Publish membership only after the full refresh succeeds. Failed or
       // cancelled comparison work leaves the last successful collection active.
@@ -735,22 +794,30 @@ export class FlipperService {
   private async runFocused(context: JobContext, listing: StoredListing): Promise<void> {
     try {
       const canResume = context.progress.assessedIds.includes(listing.raw.id)
+        && !context.progress.pendingDetailIds?.includes(listing.raw.id)
         && Date.now() - Date.parse(listing.raw.observedAt) < 24 * 60 * 60_000;
-      const raw = canResume ? listing.raw : await this.enriched(listing.raw, context, true); context.job.scanned = 1;
+      let raw = listing.raw;
+      if (!canResume) {
+        context.progress.pendingDetailIds = [raw.id];
+        await this.continueOnMarketplacePause(context, async () => {
+          raw = await this.enriched(raw, context, true); context.progress.pendingDetailIds = [];
+        });
+      }
+      context.job.scanned = 1;
       await this.warmMemory([raw], context.abort.signal);
       context.job.status = 'assessing'; const assessment = await this.assessed(raw, context);
       const updated = this.store.putListing(raw, assessment, listing.local); context.job.assessed = 1;
       context.progress.raws = [raw]; context.progress.assessedIds = [raw.id];
       this.checkpoint(context);
-      if (['desktop','gpu'].includes(assessment.kind) && assessment.eligibility !== 'excluded' && !sourceUnavailable(raw)) {
-        await this.partsPrices?.warm(this.prepared(updated).assessment,context.abort.signal);
-      }
+      await this.warmPrices([updated], context);
       if (this.comparable(raw, assessment)) {
         context.job.status = 'comparing'; context.job.message = assessment.kind === 'laptop' && isMacBookListing(raw) ? 'Checking new retail and original launch prices'
           : assessment.kind === 'laptop' ? 'Retrieving same-parts laptops across Vietnam and new retail prices' : 'Retrieving focused nationwide price evidence';
         this.checkpoint(context);
-        await this.benchmark([updated], context);
+        await this.continueOnMarketplacePause(context, () => this.benchmark([updated], context));
       }
+      this.checkWork(context);
+      if (context.marketplacePause) throw context.marketplacePause;
       context.job.status = 'complete'; context.job.message = 'Listing analysis complete; see specifications, status and price evidence';
     } catch (error) { this.failed(context, error, false); }
     finally { this.finish(context); }
@@ -868,9 +935,8 @@ export class FlipperService {
         continue;
       }
       if (!canCollect) break;
-      this.countRequest(context);
       const page = progress.nextPage;
-      const result = await this.source.search({ kind, location: 'nationwide', query, page, signal: context.abort.signal });
+      const result = await this.marketplace(context, () => this.source.search({ kind, location: 'nationwide', query, page, signal: context.abort.signal }));
       const ids = new Set(progress.raws.map(raw => raw.id)); let added = 0;
       for (const raw of result.items) if (!ids.has(raw.id) && progress.raws.length < limit) {
         ids.add(raw.id); progress.raws.push(raw); added++;
@@ -888,7 +954,9 @@ export class FlipperService {
     await this.parallel(context, members, async member => {
       member = this.prepared(member);
       if (!member.raw.description.trim()) {
+        context.progress.pendingDetailIds = [...new Set([...(context.progress.pendingDetailIds ?? []), member.raw.id])];
         const raw = await this.enriched(member.raw, context);
+        context.progress.pendingDetailIds = context.progress.pendingDetailIds.filter(id => id !== raw.id);
         const position = context.progress.raws?.findIndex(item => item.id === raw.id) ?? -1;
         if (position >= 0) context.progress.raws![position] = raw;
         const assessment = await this.assessed(raw, context);

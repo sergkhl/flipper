@@ -19,8 +19,12 @@ route replacement or reassignment cannot bypass the three-second interval.
 No direct fallback is permitted, and LiteLLM/admin traffic does not use proxies.
 
 Validate candidate routes using certificate-verified HTTPS to `example.com`,
-with at most twelve candidate checks per job and four checks in flight. These
-checks do not call Chợ Tốt or consume its request allowance. Reuse recent health
+then Google's `www.gstatic.com/generate_204` if the first website fails. A successful
+check at either independent website qualifies the route; a website error alone
+does not retire it. Each website gets four seconds, keeping the total candidate
+deadline at eight seconds. Use at most twelve candidate checks per job and four
+checks in flight. These checks do not call Chợ Tốt or consume its request
+allowance. Reuse recent health
 observations; distinguish candidate counts from routes with successful checks.
 Workers continue with fewer routes when necessary. A connection failure retires
 that route, checks for a replacement and lets other workers continue. Queue the
@@ -52,7 +56,14 @@ Batch necessary detail reads according to the remaining evidence deficit.
 Retain the results of already-started work; do not prefetch all national pages.
 
 Drain every started task before reporting failure, releasing the busy gate or
-ending its source context. Stop new work across the job on a source deferral.
+ending its source context. A source deferral stops new marketplace requests, while
+already-collected listing assessments, reachable retail sources and comparisons
+with sufficient cached evidence continue within the captured work and AI bounds.
+Queue unfinished marketplace work after independent work drains. Persist selected
+local detail reads that still need completion; an offline assessment cannot consume
+their place in the ten-read allowance or make them complete. Resume those reads,
+unfinished pages and comparisons without repeating fresh completed work. Keep the
+last successful collection published until the full refresh succeeds.
 Persist local assessment and completed-configuration progress as it changes,
 and include that checkpoint in the terminal/recovery journal. Resumption keeps
 fresh observations and original AI spending. Private status reports assigned and

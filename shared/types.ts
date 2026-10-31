@@ -377,6 +377,8 @@ export interface RefreshProgress {
   assessedIds: string[];
   comparedIds: string[];
   initialDetails: number;
+  /** Selected local detail reads that must still finish after a marketplace pause. */
+  pendingDetailIds?: string[];
   truncated?: boolean;
 }
 export interface DailyScanAttempt {

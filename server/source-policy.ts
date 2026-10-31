@@ -24,7 +24,7 @@ export class SourceDeferredError extends Error {
   constructor(readonly until: string, readonly reason: 'request_budget' | 'proxy') {
     super(reason === 'request_budget'
       ? `Marketplace request allowance is exhausted. Queued work can resume after ${until}.`
-      : `No working proxy is available. Queued work can retry after ${until}.`);
+      : `No verified proxy route is available for this attempt. Queued work can retry after ${until}.`);
     this.name = 'SourceDeferredError';
   }
 }
